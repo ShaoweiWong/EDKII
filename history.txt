@@ -1,2 +1,12 @@
+T201706260851
+Download UDK2015:
+    1. UDK2015
+       https://github.com/tianocore/tianocore.github.io/wiki/UDK2015
+    2. UDK2015 Workspace (ZIP File)
+       https://github.com/tianocore/udk/releases/download/UDK2015/UDK2015.Complete.MyWorkSpace.zip
+    3. Decompress UDK2015.Complete.MyWorkSpace.zip:
+        1. UDK2015.Complete.MyWorkSpace.zip/UDK2015.MyWorkSpace.zip/MyWorkSpace > GitRepo/MyWorkSpace
+        2. UDK2015.Complete.MyWorkSpace.zip/BaseTools(Windows).zip/* > GitRepo/MyWorkSpace/*
+
 T201706260839
 Create git respository for EDKII.
