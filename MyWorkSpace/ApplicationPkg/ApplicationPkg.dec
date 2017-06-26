@@ -1,0 +1,17 @@
+
+[DEFINES]
+    DEC_SPECIFICATION           =  0x00010017
+    PACKAGE_NAME                =  ApplicationPkg
+    PACKAGE_GUID                =  3558729A-6A26-461F-9279-9807A8C30A1C
+    PACKAGE_VERSION             =  0.00
+
+[Includes]
+    Include
+
+[LibraryClasses]
+
+[Guids]
+
+[Protocols]
+
+[Ppis]

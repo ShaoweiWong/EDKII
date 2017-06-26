@@ -1,3 +1,14 @@
+T201706260924
+Create the application template
+    1. Modify MyWorkSpace\Conf\target.txt
+        1. ACTIVE_PLATFORM = ApplicationPkg/ApplicationPkg.dsc
+        2. TARGET_ARCH = X64
+        3. TOOL_CHAIN_TAG = VS2012x86
+    2. Add the .gitignore.
+    3. Add the ApplicationPkg to build the HelloWorld.efi. Note the HelloWorld.efi is at:
+        MyWorkSpace\Build\Application\RELEASE_VS2012x86\X64\HelloWorld.efi
+    4. Add BuildCleanAll.bat and BuildLog.bat. Run BuildLog.bat to build the target HelloWorld.efi
+
 T201706260910
 Generate MyWorkSpace/Config
     1. Remove MyWorkSpace/Config/.gitignore
