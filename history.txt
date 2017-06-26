@@ -1,3 +1,9 @@
+T201706260910
+Generate MyWorkSpace/Config
+    1. Remove MyWorkSpace/Config/.gitignore
+    2. Create edksetup.cmd to call edksetup.bat.
+    3. Run edksetup.cmd to genrenate build_rule.txt, target.txt and tools_def.txt
+
 T201706260851
 Download UDK2015:
     1. UDK2015
