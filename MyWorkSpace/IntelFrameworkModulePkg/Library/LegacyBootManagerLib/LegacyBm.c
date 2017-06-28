@@ -3,7 +3,7 @@
   and manage the legacy boot option, all legacy boot option is getting from
   the legacy BBS table.
 
-Copyright (c) 2011 - 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2011 - 2017, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -176,14 +176,14 @@ LegacyBmBuildLegacyDevNameString (
   //
   // If current BBS entry has its description then use it.
   //
-  StringDesc = (CHAR8 *) (UINTN) ((CurBBSEntry->DescStringSegment << 4) + CurBBSEntry->DescStringOffset);
+  StringDesc = (CHAR8 *) (((UINTN) CurBBSEntry->DescStringSegment << 4) + CurBBSEntry->DescStringOffset);
   if (NULL != StringDesc) {
     //
     // Only get fisrt 32 characters, this is suggested by BBS spec
     //
     CopyMem (StringBufferA, StringDesc, LEGACY_BM_BOOT_DESCRIPTION_LENGTH);
     StringBufferA[LEGACY_BM_BOOT_DESCRIPTION_LENGTH] = 0;
-    AsciiStrToUnicodeStr (StringBufferA, StringBufferU);
+    AsciiStrToUnicodeStrS (StringBufferA, StringBufferU, ARRAY_SIZE (StringBufferU));
     Fmt   = L"%s";
     Type  = StringBufferU;
   }
@@ -537,7 +537,7 @@ LegacyBmCreateLegacyBootOption (
   //
   // Create the BBS device path with description string
   //
-  UnicodeStrToAsciiStr (Description, HelpString);
+  UnicodeStrToAsciiStrS (Description, HelpString, sizeof (HelpString));
   StringLen = AsciiStrLen (HelpString);
   DevicePath = AllocatePool (sizeof (BBS_BBS_DEVICE_PATH) + StringLen + END_DEVICE_PATH_LENGTH);
   ASSERT (DevicePath != NULL);
@@ -725,7 +725,7 @@ LegacyBmCreateDevOrder (
   DevOrderPtr->Length  = (UINT16) (sizeof (UINT16) + BEVCount * sizeof (UINT16));
   DevOrderPtr          = (LEGACY_DEV_ORDER_ENTRY *) LegacyBmFillDevOrderBuf (BbsTable, BBS_BEV_DEVICE, BbsCount, DevOrderPtr->Data);
 
-  ASSERT (TotalSize == (UINTN) ((UINT8 *) DevOrderPtr - (UINT8 *) DevOrder));
+  ASSERT (TotalSize == ((UINTN) DevOrderPtr - (UINTN) DevOrder));
 
   //
   // Save device order for legacy boot device to variable.

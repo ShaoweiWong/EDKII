@@ -1,7 +1,7 @@
 /** @file
   UEFI Memory page management functions.
 
-Copyright (c) 2007 - 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2007 - 2016, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -14,8 +14,6 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
 #include "DxeMain.h"
 #include "Imem.h"
-
-#define EFI_DEFAULT_PAGE_ALLOCATION_ALIGNMENT  (EFI_PAGE_SIZE)
 
 //
 // Entry for tracking the memory regions for each memory type to coalesce similar memory types
@@ -204,7 +202,7 @@ CoreAddRange (
   // If we are in EFI 1.10 compatability mode no event groups will be
   // found and nothing will happen we we call this function. These events
   // will get signaled but since a lock is held around the call to this
-  // function the notificaiton events will only be called after this funciton
+  // function the notificaiton events will only be called after this function
   // returns and the lock is released.
   //
   CoreNotifySignalList (&gEfiEventMemoryMapChangeGuid);
@@ -287,12 +285,14 @@ AllocateMemoryMapEntry (
     //
     // The list is empty, to allocate one page to refuel the list
     //
-    FreeDescriptorEntries = CoreAllocatePoolPages (EfiBootServicesData, EFI_SIZE_TO_PAGES(DEFAULT_PAGE_ALLOCATION), DEFAULT_PAGE_ALLOCATION);
-    if(FreeDescriptorEntries != NULL) {
+    FreeDescriptorEntries = CoreAllocatePoolPages (EfiBootServicesData,
+                              EFI_SIZE_TO_PAGES (DEFAULT_PAGE_ALLOCATION_GRANULARITY),
+                              DEFAULT_PAGE_ALLOCATION_GRANULARITY);
+    if (FreeDescriptorEntries != NULL) {
       //
       // Enque the free memmory map entries into the list
       //
-      for (Index = 0; Index< DEFAULT_PAGE_ALLOCATION / sizeof(MEMORY_MAP); Index++) {
+      for (Index = 0; Index < DEFAULT_PAGE_ALLOCATION_GRANULARITY / sizeof(MEMORY_MAP); Index++) {
         FreeDescriptorEntries[Index].Signature = MEMORY_MAP_SIGNATURE;
         InsertTailList (&mFreeMemoryMapEntryList, &FreeDescriptorEntries[Index].Link);
       }
@@ -553,6 +553,9 @@ CoreAddMemoryDescriptor (
   CoreFreeMemoryMapStack ();
   CoreReleaseMemoryLock ();
 
+  ApplyMemoryProtectionPolicy (EfiMaxMemoryType, Type, Start,
+    LShiftU64 (NumberOfPages, EFI_PAGE_SHIFT));
+
   //
   // If Loading Module At Fixed Address feature is enabled. try to allocate memory with Runtime code & Boot time code type
   //
@@ -725,7 +728,7 @@ CoreConvertPagesEx (
   ASSERT_LOCKED (&gMemoryLock);
   ASSERT ( (ChangingType == FALSE) || (ChangingAttributes == FALSE) );
 
-  if (NumberOfPages == 0 || ((Start & EFI_PAGE_MASK) != 0) || (Start > (Start + NumberOfBytes))) {
+  if (NumberOfPages == 0 || ((Start & EFI_PAGE_MASK) != 0) || (Start >= End)) {
     return EFI_INVALID_PARAMETER;
   }
 
@@ -751,6 +754,17 @@ CoreConvertPagesEx (
       return EFI_NOT_FOUND;
     }
 
+    //
+    // If we are converting the type of the range from EfiConventionalMemory to
+    // another type, we have to ensure that the entire range is covered by a
+    // single entry.
+    //
+    if (ChangingType && (NewType != EfiConventionalMemory)) {
+      if (Entry->End < End) {
+        DEBUG ((DEBUG_ERROR | DEBUG_PAGE, "ConvertPages: range %lx - %lx covers multiple entries\n", Start, End));
+        return EFI_NOT_FOUND;
+      }
+    }
     //
     // Convert range to the end, or to the end of the descriptor
     // if that's all we've got
@@ -1201,6 +1215,8 @@ CoreInternalAllocatePages (
 {
   EFI_STATUS      Status;
   UINT64          Start;
+  UINT64          NumberOfBytes;
+  UINT64          End;
   UINT64          MaxAddress;
   UINTN           Alignment;
 
@@ -1217,14 +1233,14 @@ CoreInternalAllocatePages (
     return EFI_INVALID_PARAMETER;
   }
 
-  Alignment = EFI_DEFAULT_PAGE_ALLOCATION_ALIGNMENT;
+  Alignment = DEFAULT_PAGE_ALLOCATION_GRANULARITY;
 
   if  (MemoryType == EfiACPIReclaimMemory   ||
        MemoryType == EfiACPIMemoryNVS       ||
        MemoryType == EfiRuntimeServicesCode ||
        MemoryType == EfiRuntimeServicesData) {
 
-    Alignment = EFI_ACPI_RUNTIME_PAGE_ALLOCATION_ALIGNMENT;
+    Alignment = RUNTIME_PAGE_ALLOCATION_GRANULARITY;
   }
 
   if (Type == AllocateAddress) {
@@ -1245,6 +1261,30 @@ CoreInternalAllocatePages (
   // The max address is the max natively addressable address for the processor
   //
   MaxAddress = MAX_ADDRESS;
+
+  //
+  // Check for Type AllocateAddress,
+  // if NumberOfPages is 0 or
+  // if (NumberOfPages << EFI_PAGE_SHIFT) is above MAX_ADDRESS or
+  // if (Start + NumberOfBytes) rolls over 0 or
+  // if Start is above MAX_ADDRESS or
+  // if End is above MAX_ADDRESS,
+  // return EFI_NOT_FOUND.
+  //
+  if (Type == AllocateAddress) {
+    if ((NumberOfPages == 0) ||
+        (NumberOfPages > RShiftU64 (MaxAddress, EFI_PAGE_SHIFT))) {
+      return EFI_NOT_FOUND;
+    }
+    NumberOfBytes = LShiftU64 (NumberOfPages, EFI_PAGE_SHIFT);
+    End = Start + NumberOfBytes - 1;
+
+    if ((Start >= End) ||
+        (Start > MaxAddress) || 
+        (End > MaxAddress)) {
+      return EFI_NOT_FOUND;
+    }
+  }
 
   if (Type == AllocateMaxAddress) {
     MaxAddress = Start;
@@ -1309,7 +1349,17 @@ CoreAllocatePages (
 
   Status = CoreInternalAllocatePages (Type, MemoryType, NumberOfPages, Memory);
   if (!EFI_ERROR (Status)) {
-    CoreUpdateProfile ((EFI_PHYSICAL_ADDRESS) (UINTN) RETURN_ADDRESS (0), MemoryProfileActionAllocatePages, MemoryType, EFI_PAGES_TO_SIZE (NumberOfPages), (VOID *) (UINTN) *Memory);
+    CoreUpdateProfile (
+      (EFI_PHYSICAL_ADDRESS) (UINTN) RETURN_ADDRESS (0),
+      MemoryProfileActionAllocatePages,
+      MemoryType,
+      EFI_PAGES_TO_SIZE (NumberOfPages),
+      (VOID *) (UINTN) *Memory,
+      NULL
+      );
+    InstallMemoryAttributesTableOnMemoryAllocation (MemoryType);
+    ApplyMemoryProtectionPolicy (EfiConventionalMemory, MemoryType, *Memory,
+      EFI_PAGES_TO_SIZE (NumberOfPages));
   }
   return Status;
 }
@@ -1319,6 +1369,7 @@ CoreAllocatePages (
 
   @param  Memory                 Base address of memory being freed
   @param  NumberOfPages          The number of pages to free
+  @param  MemoryType             Pointer to memory type
 
   @retval EFI_NOT_FOUND          Could not find the entry that covers the range
   @retval EFI_INVALID_PARAMETER  Address not aligned
@@ -1329,7 +1380,8 @@ EFI_STATUS
 EFIAPI
 CoreInternalFreePages (
   IN EFI_PHYSICAL_ADDRESS   Memory,
-  IN UINTN                  NumberOfPages
+  IN UINTN                  NumberOfPages,
+  OUT EFI_MEMORY_TYPE       *MemoryType OPTIONAL
   )
 {
   EFI_STATUS      Status;
@@ -1357,7 +1409,7 @@ CoreInternalFreePages (
     goto Done;
   }
 
-  Alignment = EFI_DEFAULT_PAGE_ALLOCATION_ALIGNMENT;
+  Alignment = DEFAULT_PAGE_ALLOCATION_GRANULARITY;
 
   ASSERT (Entry != NULL);
   if  (Entry->Type == EfiACPIReclaimMemory   ||
@@ -1365,7 +1417,7 @@ CoreInternalFreePages (
        Entry->Type == EfiRuntimeServicesCode ||
        Entry->Type == EfiRuntimeServicesData) {
 
-    Alignment = EFI_ACPI_RUNTIME_PAGE_ALLOCATION_ALIGNMENT;
+    Alignment = RUNTIME_PAGE_ALLOCATION_GRANULARITY;
 
   }
 
@@ -1376,6 +1428,10 @@ CoreInternalFreePages (
 
   NumberOfPages += EFI_SIZE_TO_PAGES (Alignment) - 1;
   NumberOfPages &= ~(EFI_SIZE_TO_PAGES (Alignment) - 1);
+
+  if (MemoryType != NULL) {
+    *MemoryType = Entry->Type;
+  }
 
   Status = CoreConvertPages (Memory, NumberOfPages, EfiConventionalMemory);
 
@@ -1406,11 +1462,22 @@ CoreFreePages (
   IN UINTN                 NumberOfPages
   )
 {
-  EFI_STATUS  Status;
+  EFI_STATUS        Status;
+  EFI_MEMORY_TYPE   MemoryType;
 
-  Status = CoreInternalFreePages (Memory, NumberOfPages);
+  Status = CoreInternalFreePages (Memory, NumberOfPages, &MemoryType);
   if (!EFI_ERROR (Status)) {
-    CoreUpdateProfile ((EFI_PHYSICAL_ADDRESS) (UINTN) RETURN_ADDRESS (0), MemoryProfileActionFreePages, (EFI_MEMORY_TYPE) 0, EFI_PAGES_TO_SIZE (NumberOfPages), (VOID *) (UINTN) Memory);
+    CoreUpdateProfile (
+      (EFI_PHYSICAL_ADDRESS) (UINTN) RETURN_ADDRESS (0),
+      MemoryProfileActionFreePages,
+      MemoryType,
+      EFI_PAGES_TO_SIZE (NumberOfPages),
+      (VOID *) (UINTN) Memory,
+      NULL
+      );
+    InstallMemoryAttributesTableOnMemoryAllocation (MemoryType);
+    ApplyMemoryProtectionPolicy (MemoryType, EfiConventionalMemory, Memory,
+      EFI_PAGES_TO_SIZE (NumberOfPages));
   }
   return Status;
 }
@@ -1869,12 +1936,12 @@ CoreTerminateMemoryMap (
         if (mMemoryTypeStatistics[Entry->Type].Runtime) {
           ASSERT (Entry->Type != EfiACPIReclaimMemory);
           ASSERT (Entry->Type != EfiACPIMemoryNVS);
-          if ((Entry->Start & (EFI_ACPI_RUNTIME_PAGE_ALLOCATION_ALIGNMENT - 1)) != 0) {
+          if ((Entry->Start & (RUNTIME_PAGE_ALLOCATION_GRANULARITY - 1)) != 0) {
             DEBUG((DEBUG_ERROR | DEBUG_PAGE, "ExitBootServices: A RUNTIME memory entry is not on a proper alignment.\n"));
             Status =  EFI_INVALID_PARAMETER;
             goto Done;
           }
-          if (((Entry->End + 1) & (EFI_ACPI_RUNTIME_PAGE_ALLOCATION_ALIGNMENT - 1)) != 0) {
+          if (((Entry->End + 1) & (RUNTIME_PAGE_ALLOCATION_GRANULARITY - 1)) != 0) {
             DEBUG((DEBUG_ERROR | DEBUG_PAGE, "ExitBootServices: A RUNTIME memory entry is not on a proper alignment.\n"));
             Status =  EFI_INVALID_PARAMETER;
             goto Done;

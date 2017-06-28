@@ -1,7 +1,7 @@
 ## @file
 # This file is used to define common static strings used by INF/DEC/DSC files
 #
-# Copyright (c) 2007 - 2015, Intel Corporation. All rights reserved.<BR>
+# Copyright (c) 2007 - 2017, Intel Corporation. All rights reserved.<BR>
 # Portions copyright (c) 2011 - 2013, ARM Ltd. All rights reserved.<BR>
 # This program and the accompanying materials
 # are licensed and made available under the terms and conditions of the BSD License
@@ -410,7 +410,8 @@ TAB_DSC_DEFINES_DEFINE = 'DEFINE'
 TAB_DSC_DEFINES_VPD_TOOL_GUID = 'VPD_TOOL_GUID'
 TAB_FIX_LOAD_TOP_MEMORY_ADDRESS = 'FIX_LOAD_TOP_MEMORY_ADDRESS'
 TAB_DSC_DEFINES_EDKGLOBAL = 'EDK_GLOBAL'
-
+TAB_DSC_PREBUILD = 'PREBUILD'
+TAB_DSC_POSTBUILD = 'POSTBUILD'
 #
 # TargetTxt Definitions
 #
@@ -468,10 +469,12 @@ TAB_FRAMEWORK_IMAGE = "EFI-IMAGE-FILE"
 TAB_C_CODE_FILE = "C-CODE-FILE"
 TAB_C_HEADER_FILE = "C-HEADER-FILE"
 TAB_UNICODE_FILE = "UNICODE-TEXT-FILE"
+TAB_IMAGE_FILE = "IMAGE-DEFINITION-FILE"
 TAB_DEPENDENCY_EXPRESSION_FILE = "DEPENDENCY-EXPRESSION-FILE"
 TAB_UNKNOWN_FILE = "UNKNOWN-TYPE-FILE"
 TAB_DEFAULT_BINARY_FILE = "_BINARY_FILE_"
 TAB_OBJECT_FILE = "OBJECT-FILE"
+TAB_VFR_FILE = 'VISUAL-FORM-REPRESENTATION-FILE'
 
 # used by BRG
 TAB_BRG_PCD = 'PCD'

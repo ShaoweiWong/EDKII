@@ -1,7 +1,7 @@
 ## @file
 # process FV generation
 #
-#  Copyright (c) 2007 - 2014, Intel Corporation. All rights reserved.<BR>
+#  Copyright (c) 2007 - 2017, Intel Corporation. All rights reserved.<BR>
 #
 #  This program and the accompanying materials
 #  are licensed and made available under the terms and conditions of the BSD License
@@ -50,6 +50,7 @@ class FV (FvClassObject):
         self.CapsuleName = None
         self.FvBaseAddress = None
         self.FvForceRebase = None
+        self.FvRegionInFD = None
         
     ## AddToBuffer()
     #
@@ -181,30 +182,33 @@ class FV (FvClassObject):
         #
         # Write the Fv contents to Buffer
         #
-        FvFileObj = open ( FvOutputFile,'r+b')
+        if os.path.isfile(FvOutputFile):
+            FvFileObj = open ( FvOutputFile,'rb')
 
-        GenFdsGlobalVariable.VerboseLogger( "\nGenerate %s FV Successfully" %self.UiFvName)
-        GenFdsGlobalVariable.SharpCounter = 0
+            GenFdsGlobalVariable.VerboseLogger( "\nGenerate %s FV Successfully" %self.UiFvName)
+            GenFdsGlobalVariable.SharpCounter = 0
 
-        Buffer.write(FvFileObj.read())
-        FvFileObj.seek(0)
-        # PI FvHeader is 0x48 byte
-        FvHeaderBuffer = FvFileObj.read(0x48)
-        # FV alignment position.
-        FvAlignmentValue = 1 << (ord (FvHeaderBuffer[0x2E]) & 0x1F)
-        # FvAlignmentValue is larger than or equal to 1K
-        if FvAlignmentValue >= 0x400:
-            if FvAlignmentValue >= 0x10000:
-                #The max alignment supported by FFS is 64K.
-                self.FvAlignment = "64K"
+            Buffer.write(FvFileObj.read())
+            FvFileObj.seek(0)
+            # PI FvHeader is 0x48 byte
+            FvHeaderBuffer = FvFileObj.read(0x48)
+            # FV alignment position.
+            FvAlignmentValue = 1 << (ord (FvHeaderBuffer[0x2E]) & 0x1F)
+            # FvAlignmentValue is larger than or equal to 1K
+            if FvAlignmentValue >= 0x400:
+                if FvAlignmentValue >= 0x10000:
+                    #The max alignment supported by FFS is 64K.
+                    self.FvAlignment = "64K"
+                else:
+                    self.FvAlignment = str (FvAlignmentValue / 0x400) + "K"
             else:
-                self.FvAlignment = str (FvAlignmentValue / 0x400) + "K"
+                # FvAlignmentValue is less than 1K
+                self.FvAlignment = str (FvAlignmentValue)
+            FvFileObj.close()
+            GenFds.ImageBinDict[self.UiFvName.upper() + 'fv'] = FvOutputFile
+            GenFdsGlobalVariable.LargeFileInFvFlags.pop()
         else:
-            # FvAlignmentValue is less than 1K
-            self.FvAlignment = str (FvAlignmentValue)
-        FvFileObj.close()
-        GenFds.ImageBinDict[self.UiFvName.upper() + 'fv'] = FvOutputFile
-        GenFdsGlobalVariable.LargeFileInFvFlags.pop()
+            GenFdsGlobalVariable.ErrorLogger("Failed to generate %s FV file." %self.UiFvName)
         return FvOutputFile
 
     ## _GetBlockSize()

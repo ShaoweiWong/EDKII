@@ -1,7 +1,7 @@
 /** @file
   HII Config Access protocol implementation of SecureBoot configuration module.
 
-Copyright (c) 2011 - 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2011 - 2017, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -63,7 +63,6 @@ UINT8 mHashOidValue[] = {
   };
 
 HASH_TABLE mHash[] = {
-  { L"SHA1",   20, &mHashOidValue[8],  5, Sha1GetContextSize,   Sha1Init,   Sha1Update,   Sha1Final  },
   { L"SHA224", 28, &mHashOidValue[13], 9, NULL,                 NULL,       NULL,         NULL       },
   { L"SHA256", 32, &mHashOidValue[22], 9, Sha256GetContextSize, Sha256Init, Sha256Update, Sha256Final},
   { L"SHA384", 48, &mHashOidValue[31], 9, Sha384GetContextSize, Sha384Init, Sha384Update, Sha384Final},
@@ -95,6 +94,33 @@ CHAR16* mDerEncodedSuffix[] = {
 };
 CHAR16* mSupportX509Suffix = L"*.cer/der/crt";
 
+SECUREBOOT_CONFIG_PRIVATE_DATA  *gSecureBootPrivateData = NULL;
+
+/**
+  This code cleans up enrolled file by closing file & free related resources attached to
+  enrolled file.
+
+  @param[in] FileContext            FileContext cached in SecureBootConfig driver
+
+**/
+VOID
+CloseEnrolledFile(
+  IN SECUREBOOT_FILE_CONTEXT *FileContext
+)
+{
+  if (FileContext->FHandle != NULL) {
+    CloseFile (FileContext->FHandle);
+    FileContext->FHandle = NULL;
+  }
+
+  if (FileContext->FileName != NULL){
+    FreePool(FileContext->FileName);
+    FileContext->FileName = NULL;
+  }
+  FileContext->FileType = UNKNOWN_FILE_TYPE;
+
+}
+
 /**
   This code checks if the FileSuffix is one of the possible DER-encoded certificate suffix.
 
@@ -116,6 +142,61 @@ IsDerEncodeCertificate (
     }
   }
   return FALSE;
+}
+
+/**
+  This code checks if the file content complies with EFI_VARIABLE_AUTHENTICATION_2 format
+The function reads file content but won't open/close given FileHandle.
+
+  @param[in] FileHandle            The FileHandle to be checked
+
+  @retval    TRUE            The content is EFI_VARIABLE_AUTHENTICATION_2 format.
+  @retval    FALSE          The content is NOT a EFI_VARIABLE_AUTHENTICATION_2 format.
+
+**/
+BOOLEAN
+IsAuthentication2Format (
+  IN   EFI_FILE_HANDLE    FileHandle
+)
+{
+  EFI_STATUS                     Status;
+  EFI_VARIABLE_AUTHENTICATION_2  *Auth2;
+  BOOLEAN                        IsAuth2Format;
+
+  IsAuth2Format = FALSE;
+
+  //
+  // Read the whole file content
+  //
+  Status = ReadFileContent(
+             FileHandle,
+             (VOID **) &mImageBase,
+             &mImageSize,
+             0
+             );
+  if (EFI_ERROR (Status)) {
+    goto ON_EXIT;
+  }
+
+  Auth2 = (EFI_VARIABLE_AUTHENTICATION_2 *)mImageBase;
+  if (Auth2->AuthInfo.Hdr.wCertificateType != WIN_CERT_TYPE_EFI_GUID) {
+    goto ON_EXIT;
+  }
+
+  if (CompareGuid(&gEfiCertPkcs7Guid, &Auth2->AuthInfo.CertType)) {
+    IsAuth2Format = TRUE;
+  }
+
+ON_EXIT:
+  //
+  // Do not close File. simply check file content
+  //
+  if (mImageBase != NULL) {
+    FreePool (mImageBase);
+    mImageBase = NULL;
+  }
+
+  return IsAuth2Format;
 }
 
 /**
@@ -473,10 +554,7 @@ ON_EXIT:
     FreePool(PkCert);
   }
 
-  if (Private->FileContext->FHandle != NULL) {
-    CloseFile (Private->FileContext->FHandle);
-    Private->FileContext->FHandle = NULL;
-  }
+  CloseEnrolledFile(Private->FileContext);
 
   return Status;
 }
@@ -653,9 +731,7 @@ EnrollRsa2048ToKek (
 
 ON_EXIT:
 
-  CloseFile (Private->FileContext->FHandle);
-  Private->FileContext->FHandle = NULL;
-  Private->FileContext->FileName = NULL;
+  CloseEnrolledFile(Private->FileContext);
 
   if (Private->SignatureGUID != NULL) {
     FreePool (Private->SignatureGUID);
@@ -776,9 +852,7 @@ EnrollX509ToKek (
 
 ON_EXIT:
 
-  CloseFile (Private->FileContext->FHandle);
-  Private->FileContext->FileName = NULL;
-  Private->FileContext->FHandle = NULL;
+  CloseEnrolledFile(Private->FileContext);
 
   if (Private->SignatureGUID != NULL) {
     FreePool (Private->SignatureGUID);
@@ -812,7 +886,7 @@ EnrollKeyExchangeKey (
   EFI_STATUS  Status;
   UINTN       NameLength;
 
-  if ((Private->FileContext->FileName == NULL) || (Private->SignatureGUID == NULL)) {
+  if ((Private->FileContext->FHandle == NULL) || (Private->FileContext->FileName == NULL) || (Private->SignatureGUID == NULL)) {
     return EFI_INVALID_PARAMETER;
   }
 
@@ -835,6 +909,11 @@ EnrollKeyExchangeKey (
   } else if (CompareMem (FilePostFix, L".pbk",4) == 0) {
     return EnrollRsa2048ToKek (Private);
   } else {
+    //
+    // File type is wrong, simply close it
+    //
+    CloseEnrolledFile(Private->FileContext);
+
     return EFI_INVALID_PARAMETER;
   }
 }
@@ -946,9 +1025,7 @@ EnrollX509toSigDB (
 
 ON_EXIT:
 
-  CloseFile (Private->FileContext->FHandle);
-  Private->FileContext->FileName = NULL;
-  Private->FileContext->FHandle = NULL;
+  CloseEnrolledFile(Private->FileContext);
 
   if (Private->SignatureGUID != NULL) {
     FreePool (Private->SignatureGUID);
@@ -1506,9 +1583,8 @@ EnrollX509HashtoSigDB (
   }
 
 ON_EXIT:
-  CloseFile (Private->FileContext->FHandle);
-  Private->FileContext->FileName = NULL;
-  Private->FileContext->FHandle = NULL;
+
+  CloseEnrolledFile(Private->FileContext);
 
   if (Private->SignatureGUID != NULL) {
     FreePool (Private->SignatureGUID);
@@ -1592,6 +1668,54 @@ ON_EXIT:
 }
 
 /**
+  Reads contents of a PE/COFF image in memory buffer.
+
+  Caution: This function may receive untrusted input.
+  PE/COFF image is external input, so this function will make sure the PE/COFF image content
+  read is within the image buffer.
+
+  @param  FileHandle      Pointer to the file handle to read the PE/COFF image.
+  @param  FileOffset      Offset into the PE/COFF image to begin the read operation.
+  @param  ReadSize        On input, the size in bytes of the requested read operation.
+                          On output, the number of bytes actually read.
+  @param  Buffer          Output buffer that contains the data read from the PE/COFF image.
+
+  @retval EFI_SUCCESS     The specified portion of the PE/COFF image was read and the size
+**/
+EFI_STATUS
+EFIAPI
+SecureBootConfigImageRead (
+  IN     VOID    *FileHandle,
+  IN     UINTN   FileOffset,
+  IN OUT UINTN   *ReadSize,
+  OUT    VOID    *Buffer
+  )
+{
+  UINTN               EndPosition;
+
+  if (FileHandle == NULL || ReadSize == NULL || Buffer == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  if (MAX_ADDRESS - FileOffset < *ReadSize) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  EndPosition = FileOffset + *ReadSize;
+  if (EndPosition > mImageSize) {
+    *ReadSize = (UINT32)(mImageSize - FileOffset);
+  }
+
+  if (FileOffset >= mImageSize) {
+    *ReadSize = 0;
+  }
+
+  CopyMem (Buffer, (UINT8 *)((UINTN) FileHandle + FileOffset), *ReadSize);
+
+  return EFI_SUCCESS;
+}
+
+/**
   Load PE/COFF image information into internal buffer and check its validity.
 
   @retval   EFI_SUCCESS         Successful
@@ -1607,9 +1731,28 @@ LoadPeImage (
   EFI_IMAGE_DOS_HEADER                  *DosHdr;
   EFI_IMAGE_NT_HEADERS32                *NtHeader32;
   EFI_IMAGE_NT_HEADERS64                *NtHeader64;
+  PE_COFF_LOADER_IMAGE_CONTEXT          ImageContext;
+  EFI_STATUS                            Status;
 
   NtHeader32 = NULL;
   NtHeader64 = NULL;
+
+  ZeroMem (&ImageContext, sizeof (ImageContext));
+  ImageContext.Handle    = (VOID *) mImageBase;
+  ImageContext.ImageRead = (PE_COFF_LOADER_READ_FILE) SecureBootConfigImageRead;
+
+  //
+  // Get information about the image being loaded
+  //
+  Status = PeCoffLoaderGetImageInfo (&ImageContext);
+  if (EFI_ERROR (Status)) {
+    //
+    // The information can't be got from the invalid PeImage
+    //
+    DEBUG ((DEBUG_INFO, "SecureBootConfigDxe: PeImage invalid. \n"));
+    return Status;
+  }
+
   //
   // Read the Dos header
   //
@@ -1671,6 +1814,9 @@ LoadPeImage (
   Calculate hash of Pe/Coff image based on the authenticode image hashing in
   PE/COFF Specification 8.0 Appendix A
 
+  Notes: PE/COFF image has been checked by BasePeCoffLib PeCoffLoaderGetImageInfo() in 
+  the function LoadPeImage ().
+
   @param[in]    HashAlg   Hash algorithm type.
 
   @retval TRUE            Successfully hash image.
@@ -1698,7 +1844,7 @@ HashPeImage (
   SectionHeader = NULL;
   Status        = FALSE;
 
-  if ((HashAlg != HASHALG_SHA1) && (HashAlg != HASHALG_SHA256)) {
+  if (HashAlg != HASHALG_SHA256) {
     return FALSE;
   }
 
@@ -1707,13 +1853,8 @@ HashPeImage (
   //
   ZeroMem (mImageDigest, MAX_DIGEST_SIZE);
 
-  if (HashAlg == HASHALG_SHA1) {
-    mImageDigestSize  = SHA1_DIGEST_SIZE;
-    mCertType         = gEfiCertSha1Guid;
-  } else if (HashAlg == HASHALG_SHA256) {
-    mImageDigestSize  = SHA256_DIGEST_SIZE;
-    mCertType         = gEfiCertSha256Guid;
-  }
+  mImageDigestSize  = SHA256_DIGEST_SIZE;
+  mCertType         = gEfiCertSha256Guid;
 
   CtxSize   = mHash[HashAlg].GetContextSize();
 
@@ -1755,12 +1896,12 @@ HashPeImage (
     //
     // Use PE32 offset.
     //
-    HashSize = (UINTN) ((UINT8 *) (&mNtHeader.Pe32->OptionalHeader.CheckSum) - HashBase);
+    HashSize = (UINTN) (&mNtHeader.Pe32->OptionalHeader.CheckSum) - (UINTN) HashBase;
   } else {
     //
     // Use PE32+ offset.
     //
-    HashSize = (UINTN) ((UINT8 *) (&mNtHeader.Pe32Plus->OptionalHeader.CheckSum) - HashBase);
+    HashSize = (UINTN) (&mNtHeader.Pe32Plus->OptionalHeader.CheckSum) - (UINTN) HashBase;
   }
 
   Status  = mHash[HashAlg].HashUpdate(HashCtx, HashBase, HashSize);
@@ -1777,13 +1918,13 @@ HashPeImage (
     // Use PE32 offset.
     //
     HashBase = (UINT8 *) &mNtHeader.Pe32->OptionalHeader.CheckSum + sizeof (UINT32);
-    HashSize = (UINTN) ((UINT8 *) (&mNtHeader.Pe32->OptionalHeader.DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY]) - HashBase);
+    HashSize = (UINTN) (&mNtHeader.Pe32->OptionalHeader.DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY]) - (UINTN) HashBase;
   } else {
     //
     // Use PE32+ offset.
     //
     HashBase = (UINT8 *) &mNtHeader.Pe32Plus->OptionalHeader.CheckSum + sizeof (UINT32);
-    HashSize = (UINTN) ((UINT8 *) (&mNtHeader.Pe32Plus->OptionalHeader.DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY]) - HashBase);
+    HashSize = (UINTN) (&mNtHeader.Pe32Plus->OptionalHeader.DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY]) - (UINTN) HashBase;
   }
 
   Status  = mHash[HashAlg].HashUpdate(HashCtx, HashBase, HashSize);
@@ -1799,13 +1940,13 @@ HashPeImage (
     // Use PE32 offset
     //
     HashBase = (UINT8 *) &mNtHeader.Pe32->OptionalHeader.DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY + 1];
-    HashSize = mNtHeader.Pe32->OptionalHeader.SizeOfHeaders - (UINTN) ((UINT8 *) (&mNtHeader.Pe32->OptionalHeader.DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY + 1]) - mImageBase);
+    HashSize = mNtHeader.Pe32->OptionalHeader.SizeOfHeaders - ((UINTN) (&mNtHeader.Pe32->OptionalHeader.DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY + 1]) - (UINTN) mImageBase);
   } else {
     //
     // Use PE32+ offset.
     //
     HashBase = (UINT8 *) &mNtHeader.Pe32Plus->OptionalHeader.DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY + 1];
-    HashSize = mNtHeader.Pe32Plus->OptionalHeader.SizeOfHeaders - (UINTN) ((UINT8 *) (&mNtHeader.Pe32Plus->OptionalHeader.DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY + 1]) - mImageBase);
+    HashSize = mNtHeader.Pe32Plus->OptionalHeader.SizeOfHeaders - ((UINTN) (&mNtHeader.Pe32Plus->OptionalHeader.DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY + 1]) - (UINTN) mImageBase);
   }
 
   Status  = mHash[HashAlg].HashUpdate(HashCtx, HashBase, HashSize);
@@ -1999,6 +2140,107 @@ HashPeImageByType (
 
 **/
 EFI_STATUS
+EnrollAuthentication2Descriptor (
+  IN SECUREBOOT_CONFIG_PRIVATE_DATA *Private,
+  IN CHAR16                         *VariableName
+  )
+{
+  EFI_STATUS                        Status;
+  VOID                              *Data;
+  UINTN                             DataSize;
+  UINT32                            Attr;
+
+  Data = NULL;
+
+  //
+  // DBT only support DER-X509 Cert Enrollment
+  //
+  if (StrCmp (VariableName, EFI_IMAGE_SECURITY_DATABASE2) == 0) {
+    return EFI_UNSUPPORTED;
+  }
+
+  //
+  // Read the whole file content
+  //
+  Status = ReadFileContent(
+             Private->FileContext->FHandle,
+             (VOID **) &mImageBase,
+             &mImageSize,
+             0
+             );
+  if (EFI_ERROR (Status)) {
+    goto ON_EXIT;
+  }
+  ASSERT (mImageBase != NULL);
+
+  Attr = EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_RUNTIME_ACCESS
+         | EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS;
+
+  //
+  // Check if SigDB variable has been already existed.
+  // If true, use EFI_VARIABLE_APPEND_WRITE attribute to append the
+  // new signature data to original variable
+  //
+  DataSize = 0;
+  Status = gRT->GetVariable(
+                  VariableName,
+                  &gEfiImageSecurityDatabaseGuid,
+                  NULL,
+                  &DataSize,
+                  NULL
+                  );
+  if (Status == EFI_BUFFER_TOO_SMALL) {
+    Attr |= EFI_VARIABLE_APPEND_WRITE;
+  } else if (Status != EFI_NOT_FOUND) {
+    goto ON_EXIT;
+  }
+
+  //
+  // Diretly set AUTHENTICATION_2 data to SetVariable
+  //
+  Status = gRT->SetVariable(
+                  VariableName,
+                  &gEfiImageSecurityDatabaseGuid,
+                  Attr,
+                  mImageSize,
+                  mImageBase
+                  );
+
+  DEBUG((DEBUG_INFO, "Enroll AUTH_2 data to Var:%s Status: %x\n", VariableName, Status));
+
+ON_EXIT:
+
+  CloseEnrolledFile(Private->FileContext);
+
+  if (Data != NULL) {
+    FreePool (Data);
+  }
+
+  if (mImageBase != NULL) {
+    FreePool (mImageBase);
+    mImageBase = NULL;
+  }
+
+  return Status;
+
+}
+
+
+/**
+  Enroll a new executable's signature into Signature Database.
+
+  @param[in] PrivateData     The module's private data.
+  @param[in] VariableName    Variable name of signature database, must be
+                             EFI_IMAGE_SECURITY_DATABASE, EFI_IMAGE_SECURITY_DATABASE1
+                             or EFI_IMAGE_SECURITY_DATABASE2.
+
+  @retval   EFI_SUCCESS            New signature is enrolled successfully.
+  @retval   EFI_INVALID_PARAMETER  The parameter is invalid.
+  @retval   EFI_UNSUPPORTED        Unsupported command.
+  @retval   EFI_OUT_OF_RESOURCES   Could not allocate needed resources.
+
+**/
+EFI_STATUS
 EnrollImageSignatureToSigDB (
   IN SECUREBOOT_CONFIG_PRIVATE_DATA *Private,
   IN CHAR16                         *VariableName
@@ -2153,9 +2395,7 @@ EnrollImageSignatureToSigDB (
 
 ON_EXIT:
 
-  CloseFile (Private->FileContext->FHandle);
-  Private->FileContext->FHandle = NULL;
-  Private->FileContext->FileName = NULL;
+  CloseEnrolledFile(Private->FileContext);
 
   if (Private->SignatureGUID != NULL) {
     FreePool (Private->SignatureGUID);
@@ -2219,9 +2459,11 @@ EnrollSignatureDatabase (
     // Supports DER-encoded X509 certificate.
     //
     return EnrollX509toSigDB (Private, VariableName);
+  } else if (IsAuthentication2Format(Private->FileContext->FHandle)){
+    return EnrollAuthentication2Descriptor(Private, VariableName);
+  } else {
+    return EnrollImageSignatureToSigDB (Private, VariableName);
   }
-
-  return EnrollImageSignatureToSigDB (Private, VariableName);
 }
 
 /**
@@ -2809,13 +3051,54 @@ ON_EXIT:
 }
 
 /**
+
+  Update SecureBoot strings based on new Secure Boot Mode State. String includes STR_SECURE_BOOT_STATE_CONTENT
+ and STR_CUR_SECURE_BOOT_MODE_CONTENT.
+
+  @param[in]    PrivateData         Module's private data.
+
+  @return EFI_SUCCESS              Update secure boot strings successfully.
+  @return other                          Fail to update secure boot strings.
+
+**/
+EFI_STATUS
+UpdateSecureBootString(
+  IN SECUREBOOT_CONFIG_PRIVATE_DATA  *Private
+  )
+{
+  UINT8       *SecureBoot;
+
+  SecureBoot = NULL;
+
+  //
+  // Get current secure boot state.
+  //
+  GetVariable2 (EFI_SECURE_BOOT_MODE_NAME, &gEfiGlobalVariableGuid, (VOID**)&SecureBoot, NULL);
+  if (SecureBoot == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  if (*SecureBoot == SECURE_BOOT_MODE_ENABLE) {
+    HiiSetString (Private->HiiHandle, STRING_TOKEN (STR_SECURE_BOOT_STATE_CONTENT), L"Enabled", NULL);
+  } else {
+    HiiSetString (Private->HiiHandle, STRING_TOKEN (STR_SECURE_BOOT_STATE_CONTENT), L"Disabled", NULL);
+  }
+
+  FreePool(SecureBoot);
+
+  return EFI_SUCCESS;
+}
+
+/**
   This function extracts configuration from variable.
 
+  @param[in]       Private      Point to SecureBoot configuration driver private data.
   @param[in, out]  ConfigData   Point to SecureBoot configuration private data.
 
 **/
 VOID
 SecureBootExtractConfigFromVariable (
+  IN SECUREBOOT_CONFIG_PRIVATE_DATA  *Private,
   IN OUT SECUREBOOT_CONFIGURATION    *ConfigData
   )
 {
@@ -2840,20 +3123,10 @@ SecureBootExtractConfigFromVariable (
   ConfigData->RevocationTime.Hour   = CurrTime.Hour;
   ConfigData->RevocationTime.Minute = CurrTime.Minute;
   ConfigData->RevocationTime.Second = 0;
-
-  //
-  // If the SecureBootEnable Variable doesn't exist, hide the SecureBoot Enable/Disable
-  // Checkbox.
-  //
-  ConfigData->AttemptSecureBoot = FALSE;
-  GetVariable2 (EFI_SECURE_BOOT_ENABLE_NAME, &gEfiSecureBootEnableDisableGuid, (VOID**)&SecureBootEnable, NULL);
-  if (SecureBootEnable == NULL) {
-    ConfigData->HideSecureBoot = TRUE;
+  if (Private->FileContext->FHandle != NULL) {
+    ConfigData->FileEnrollType = Private->FileContext->FileType;
   } else {
-    ConfigData->HideSecureBoot = FALSE;
-    if ((*SecureBootEnable) == SECURE_BOOT_ENABLE) {
-      ConfigData->AttemptSecureBoot = TRUE;
-    }
+    ConfigData->FileEnrollType = UNKNOWN_FILE_TYPE;
   }
 
   //
@@ -2873,6 +3146,26 @@ SecureBootExtractConfigFromVariable (
     ConfigData->HasPk = FALSE;
   } else  {
     ConfigData->HasPk = TRUE;
+  }
+
+  //
+  // Check SecureBootEnable & Pk status, fix the inconsistence. 
+  // If the SecureBootEnable Variable doesn't exist, hide the SecureBoot Enable/Disable
+  // Checkbox.
+  //
+  ConfigData->AttemptSecureBoot = FALSE;
+  GetVariable2 (EFI_SECURE_BOOT_ENABLE_NAME, &gEfiSecureBootEnableDisableGuid, (VOID**)&SecureBootEnable, NULL);  
+
+  //
+  // Fix Pk, SecureBootEnable inconsistence
+  //
+  if ((SetupMode != NULL) && (*SetupMode) == USER_MODE) {
+    ConfigData->HideSecureBoot = FALSE;
+    if ((SecureBootEnable != NULL) && (*SecureBootEnable == SECURE_BOOT_ENABLE)) {
+      ConfigData->AttemptSecureBoot = TRUE;
+    }
+  } else {
+    ConfigData->HideSecureBoot = TRUE;
   }
 
   //
@@ -2939,7 +3232,6 @@ SecureBootExtractConfig (
   EFI_STRING                        ConfigRequestHdr;
   SECUREBOOT_CONFIG_PRIVATE_DATA    *PrivateData;
   BOOLEAN                           AllocatedRequest;
-  UINT8                             *SecureBoot;
 
   if (Progress == NULL || Results == NULL) {
     return EFI_INVALID_PARAMETER;
@@ -2949,7 +3241,6 @@ SecureBootExtractConfig (
   ConfigRequestHdr = NULL;
   ConfigRequest    = NULL;
   Size             = 0;
-  SecureBoot       = NULL;
 
   ZeroMem (&Configuration, sizeof (Configuration));
   PrivateData      = SECUREBOOT_CONFIG_PRIVATE_FROM_THIS (This);
@@ -2959,23 +3250,12 @@ SecureBootExtractConfig (
     return EFI_NOT_FOUND;
   }
 
+  ZeroMem(&Configuration, sizeof(SECUREBOOT_CONFIGURATION));
+
   //
   // Get Configuration from Variable.
   //
-  SecureBootExtractConfigFromVariable (&Configuration);
-
-  //
-  // Update current secure boot state.
-  //
-  GetVariable2 (EFI_SECURE_BOOT_MODE_NAME, &gEfiGlobalVariableGuid, (VOID**)&SecureBoot, NULL);
-  if (SecureBoot != NULL && *SecureBoot == SECURE_BOOT_MODE_ENABLE) {
-    HiiSetString (PrivateData->HiiHandle, STRING_TOKEN (STR_SECURE_BOOT_STATE_CONTENT), L"Enabled", NULL);
-  } else {
-    HiiSetString (PrivateData->HiiHandle, STRING_TOKEN (STR_SECURE_BOOT_STATE_CONTENT), L"Disabled", NULL);
-  }
-  if (SecureBoot != NULL) {
-    FreePool (SecureBoot);
-  }
+  SecureBootExtractConfigFromVariable (PrivateData, &Configuration);
 
   BufferSize = sizeof (SECUREBOOT_CONFIGURATION);
   ConfigRequest = Request;
@@ -3050,10 +3330,10 @@ SecureBootRouteConfig (
        OUT EFI_STRING                          *Progress
   )
 {
-  UINT8                      *SecureBootEnable;
-  SECUREBOOT_CONFIGURATION   IfrNvData;
-  UINTN                      BufferSize;
-  EFI_STATUS                 Status;
+  SECUREBOOT_CONFIGURATION          IfrNvData;
+  UINTN                             BufferSize;
+  SECUREBOOT_CONFIG_PRIVATE_DATA    *PrivateData;
+  EFI_STATUS                        Status;
 
   if (Configuration == NULL || Progress == NULL) {
     return EFI_INVALID_PARAMETER;
@@ -3064,10 +3344,12 @@ SecureBootRouteConfig (
     return EFI_NOT_FOUND;
   }
 
+  PrivateData = SECUREBOOT_CONFIG_PRIVATE_FROM_THIS (This);
+
   //
   // Get Configuration from Variable.
   //
-  SecureBootExtractConfigFromVariable (&IfrNvData);
+  SecureBootExtractConfigFromVariable (PrivateData, &IfrNvData);
 
   //
   // Map the Configuration to the configuration block.
@@ -3087,10 +3369,7 @@ SecureBootRouteConfig (
   //
   // Store Buffer Storage back to EFI variable if needed
   //
-  SecureBootEnable = NULL;
-  GetVariable2 (EFI_SECURE_BOOT_ENABLE_NAME, &gEfiSecureBootEnableDisableGuid, (VOID**)&SecureBootEnable, NULL);
-  if (NULL != SecureBootEnable) {
-    FreePool (SecureBootEnable);
+  if (!IfrNvData.HideSecureBoot) {
     Status = SaveSecureBootVariable (IfrNvData.AttemptSecureBoot);
     if (EFI_ERROR (Status)) {
       return Status;
@@ -3136,50 +3415,34 @@ SecureBootCallback (
 {
   EFI_INPUT_KEY                   Key;
   EFI_STATUS                      Status;
+  RETURN_STATUS                   RStatus;
   SECUREBOOT_CONFIG_PRIVATE_DATA  *Private;
   UINTN                           BufferSize;
   SECUREBOOT_CONFIGURATION        *IfrNvData;
   UINT16                          LabelId;
   UINT8                           *SecureBootEnable;
+  UINT8                           *Pk;
   UINT8                           *SecureBootMode;
   UINT8                           *SetupMode;
   CHAR16                          PromptString[100];
+  EFI_DEVICE_PATH_PROTOCOL        *File;
+  UINTN                           NameLength;
+  UINT16                          *FilePostFix;
+  SECUREBOOT_CONFIG_PRIVATE_DATA  *PrivateData;
 
+  Status           = EFI_SUCCESS;
   SecureBootEnable = NULL;
   SecureBootMode   = NULL;
   SetupMode        = NULL;
+  File             = NULL;
 
   if ((This == NULL) || (Value == NULL) || (ActionRequest == NULL)) {
     return EFI_INVALID_PARAMETER;
   }
 
-  if (Action == EFI_BROWSER_ACTION_FORM_OPEN) {
-    if (QuestionId == KEY_SECURE_BOOT_MODE) {
-      mIsEnterSecureBootForm = TRUE;
-    }
-
-    return EFI_SUCCESS;
-  }
-
-  if (Action == EFI_BROWSER_ACTION_RETRIEVE) {
-    Status = EFI_UNSUPPORTED;
-    if (QuestionId == KEY_SECURE_BOOT_MODE) {
-      if (mIsEnterSecureBootForm) {
-        Value->u8 = SECURE_BOOT_MODE_STANDARD;
-        Status = EFI_SUCCESS;
-      }
-    }
-    return Status;
-  }
-
-  if ((Action != EFI_BROWSER_ACTION_CHANGED) &&
-      (Action != EFI_BROWSER_ACTION_CHANGING) &&
-      (Action != EFI_BROWSER_ACTION_FORM_CLOSE) &&
-      (Action != EFI_BROWSER_ACTION_DEFAULT_STANDARD)) {
-    return EFI_UNSUPPORTED;
-  }
-
   Private = SECUREBOOT_CONFIG_PRIVATE_FROM_THIS (This);
+
+  gSecureBootPrivateData = Private;
 
   //
   // Retrieve uncommitted data from Browser
@@ -3190,9 +3453,50 @@ SecureBootCallback (
     return EFI_OUT_OF_RESOURCES;
   }
 
-  Status = EFI_SUCCESS;
-
   HiiGetBrowserData (&gSecureBootConfigFormSetGuid, mSecureBootStorageName, BufferSize, (UINT8 *) IfrNvData);
+
+  if (Action == EFI_BROWSER_ACTION_FORM_OPEN) {
+    if (QuestionId == KEY_SECURE_BOOT_MODE) {
+      //
+      // Update secure boot strings when opening this form
+      //
+      Status = UpdateSecureBootString(Private);
+      SecureBootExtractConfigFromVariable (Private, IfrNvData);
+      mIsEnterSecureBootForm = TRUE;
+    } else {
+      //
+      // When entering SecureBoot OPTION Form
+      // always close opened file & free resource
+      //
+      if ((QuestionId == KEY_SECURE_BOOT_PK_OPTION) ||
+          (QuestionId == KEY_SECURE_BOOT_KEK_OPTION) ||
+          (QuestionId == KEY_SECURE_BOOT_DB_OPTION) ||
+          (QuestionId == KEY_SECURE_BOOT_DBX_OPTION) ||
+          (QuestionId == KEY_SECURE_BOOT_DBT_OPTION)) {
+        CloseEnrolledFile(Private->FileContext);
+      }
+    }
+    goto EXIT;
+  }
+
+  if (Action == EFI_BROWSER_ACTION_RETRIEVE) {
+    Status = EFI_UNSUPPORTED;
+    if (QuestionId == KEY_SECURE_BOOT_MODE) {
+      if (mIsEnterSecureBootForm) {
+        Value->u8 = SECURE_BOOT_MODE_STANDARD;
+        Status = EFI_SUCCESS;
+      }
+    } 
+    goto EXIT;
+  }
+
+  if ((Action != EFI_BROWSER_ACTION_CHANGED) &&
+      (Action != EFI_BROWSER_ACTION_CHANGING) &&
+      (Action != EFI_BROWSER_ACTION_FORM_CLOSE) &&
+      (Action != EFI_BROWSER_ACTION_DEFAULT_STANDARD)) {
+    Status = EFI_UNSUPPORTED;
+    goto EXIT;
+  }
 
   if (Action == EFI_BROWSER_ACTION_CHANGING) {
 
@@ -3220,15 +3524,11 @@ SecureBootCallback (
       }
       break;
 
-    case KEY_SECURE_BOOT_OPTION:
-      FreeMenu (&DirectoryMenu);
-      FreeMenu (&FsOptionMenu);
-      break;
-
     case KEY_SECURE_BOOT_KEK_OPTION:
     case KEY_SECURE_BOOT_DB_OPTION:
     case KEY_SECURE_BOOT_DBX_OPTION:
     case KEY_SECURE_BOOT_DBT_OPTION:
+      PrivateData = SECUREBOOT_CONFIG_PRIVATE_FROM_THIS (This);
       //
       // Clear Signature GUID.
       //
@@ -3239,6 +3539,11 @@ SecureBootCallback (
           return EFI_OUT_OF_RESOURCES;
         }
       }
+
+      //
+      // Cleanup VFRData once leaving PK/KEK/DB/DBX/DBT enroll/delete page
+      //
+      SecureBootExtractConfigFromVariable (PrivateData, IfrNvData);
 
       if (QuestionId == KEY_SECURE_BOOT_DB_OPTION) {
         LabelId = SECUREBOOT_ENROLL_SIGNATURE_TO_DB;
@@ -3255,28 +3560,64 @@ SecureBootCallback (
       //
       CleanUpPage (LabelId, Private);
       break;
+    case KEY_SECURE_BOOT_PK_OPTION:
+      LabelId = FORMID_ENROLL_PK_FORM;
+      //
+      // Refresh selected file.
+      //
+      CleanUpPage (LabelId, Private);
+      break;
 
-    case SECUREBOOT_ADD_PK_FILE_FORM_ID:
+    case FORMID_ENROLL_PK_FORM:
+      ChooseFile (NULL, NULL, UpdatePKFromFile, &File);
+      break;
+
     case FORMID_ENROLL_KEK_FORM:
+      ChooseFile (NULL, NULL, UpdateKEKFromFile, &File);
+      break;
+
     case SECUREBOOT_ENROLL_SIGNATURE_TO_DB:
+      ChooseFile (NULL, NULL, UpdateDBFromFile, &File);
+      break;
+
     case SECUREBOOT_ENROLL_SIGNATURE_TO_DBX:
-    case SECUREBOOT_ENROLL_SIGNATURE_TO_DBT:
-      if (QuestionId == SECUREBOOT_ADD_PK_FILE_FORM_ID) {
-        Private->FeCurrentState = FileExplorerStateEnrollPkFile;
-      } else if (QuestionId == FORMID_ENROLL_KEK_FORM) {
-        Private->FeCurrentState = FileExplorerStateEnrollKekFile;
-      } else if (QuestionId == SECUREBOOT_ENROLL_SIGNATURE_TO_DB) {
-        Private->FeCurrentState = FileExplorerStateEnrollSignatureFileToDb;
-      } else if (QuestionId == SECUREBOOT_ENROLL_SIGNATURE_TO_DBX) {
-        Private->FeCurrentState = FileExplorerStateEnrollSignatureFileToDbx;
-        IfrNvData->CertificateFormat = HASHALG_SHA256;
-      } else {
-        Private->FeCurrentState = FileExplorerStateEnrollSignatureFileToDbt;
+      ChooseFile (NULL, NULL, UpdateDBXFromFile, &File);
+
+      if (Private->FileContext->FHandle != NULL) {
+        //
+        // Parse the file's postfix.
+        //
+        NameLength = StrLen (Private->FileContext->FileName);
+        if (NameLength <= 4) {
+          return FALSE;
+        }
+        FilePostFix = Private->FileContext->FileName + NameLength - 4;
+
+        if (IsDerEncodeCertificate (FilePostFix)) {
+          //
+          // Supports DER-encoded X509 certificate.
+          //
+          IfrNvData->FileEnrollType = X509_CERT_FILE_TYPE;
+        } else if (IsAuthentication2Format(Private->FileContext->FHandle)){
+          IfrNvData->FileEnrollType = AUTHENTICATION_2_FILE_TYPE;
+        } else {
+          IfrNvData->FileEnrollType = PE_IMAGE_FILE_TYPE;
+        }
+        Private->FileContext->FileType = IfrNvData->FileEnrollType;
+
+        //
+        // Clean up Certificate Format if File type is not X509 DER
+        //
+        if (IfrNvData->FileEnrollType != X509_CERT_FILE_TYPE) {
+          IfrNvData->CertificateFormat = HASHALG_RAW;
+        }
+        DEBUG((DEBUG_ERROR, "IfrNvData->FileEnrollType %d\n", Private->FileContext->FileType));
       }
 
-      Private->FeDisplayContext = FileExplorerDisplayUnknown;
-      CleanUpPage (FORM_FILE_EXPLORER_ID, Private);
-      UpdateFileExplorer (Private, 0);
+      break;
+
+    case SECUREBOOT_ENROLL_SIGNATURE_TO_DBT:
+      ChooseFile (NULL, NULL, UpdateDBTFromFile, &File);
       break;
 
     case KEY_SECURE_BOOT_DELETE_PK:
@@ -3382,7 +3723,12 @@ SecureBootCallback (
           L"Enrollment failed! Same certificate had already been in the dbx!",
           NULL
           );
-          break;
+
+        //
+        // Cert already exists in DBX. Close opened file before exit.
+        //
+        CloseEnrolledFile(Private->FileContext);
+        break;
       }
 
       if ((IfrNvData != NULL) && (IfrNvData->CertificateFormat < HASHALG_MAX)) {
@@ -3393,6 +3739,7 @@ SecureBootCallback (
                    &IfrNvData->RevocationTime,
                    IfrNvData->AlwaysRevocation
                    );
+        IfrNvData->CertificateFormat = HASHALG_RAW;
       } else {
         Status = EnrollSignatureDatabase (Private, EFI_IMAGE_SECURITY_DATABASE1);
       }
@@ -3401,7 +3748,7 @@ SecureBootCallback (
           EFI_LIGHTGRAY | EFI_BACKGROUND_BLUE,
           &Key,
           L"ERROR: Unsupported file type!",
-          L"Only supports DER-encoded X509 certificate and executable EFI image",
+          L"Only supports DER-encoded X509 certificate, AUTH_2 format data & executable EFI image",
           NULL
           );
       }
@@ -3419,11 +3766,26 @@ SecureBootCallback (
           );
       }
       break;
-
+    case KEY_VALUE_SAVE_AND_EXIT_PK:
+      Status = EnrollPlatformKey (Private);
+      if (EFI_ERROR (Status)) {
+        UnicodeSPrint (
+          PromptString,
+          sizeof (PromptString),
+          L"Only DER encoded certificate file (%s) is supported.",
+          mSupportX509Suffix
+          );
+        CreatePopUp (
+          EFI_LIGHTGRAY | EFI_BACKGROUND_BLUE,
+          &Key,
+          L"ERROR: Unsupported file type!",
+          PromptString,
+          NULL
+          );
+      }
+      break;
     default:
-      if (QuestionId >= FILE_OPTION_GOTO_OFFSET) {
-        UpdateFileExplorer (Private, QuestionId);
-      } else if ((QuestionId >= OPTION_DEL_KEK_QUESTION_ID) &&
+      if ((QuestionId >= OPTION_DEL_KEK_QUESTION_ID) &&
                  (QuestionId < (OPTION_DEL_KEK_QUESTION_ID + OPTION_CONFIG_RANGE))) {
         DeleteKeyExchangeKey (Private, QuestionId);
       } else if ((QuestionId >= OPTION_DEL_DB_QUESTION_ID) &&
@@ -3461,72 +3823,41 @@ SecureBootCallback (
           );
       }
       break;
-    }
-  } else if (Action == EFI_BROWSER_ACTION_CHANGED) {
-    switch (QuestionId) {
-    case KEY_SECURE_BOOT_ENABLE:
-      *ActionRequest = EFI_BROWSER_ACTION_REQUEST_FORM_APPLY;
-      break;
-    case KEY_VALUE_SAVE_AND_EXIT_PK:
-      Status = EnrollPlatformKey (Private);
-      if (EFI_ERROR (Status)) {
-        UnicodeSPrint (
-          PromptString,
-          sizeof (PromptString),
-          L"Only DER encoded certificate file (%s) is supported.",
-          mSupportX509Suffix
-          );
-        CreatePopUp (
-          EFI_LIGHTGRAY | EFI_BACKGROUND_BLUE,
-          &Key,
-          L"ERROR: Unsupported file type!",
-          PromptString,
-          NULL
-          );
-      } else {
-        *ActionRequest = EFI_BROWSER_ACTION_REQUEST_RESET;
-      }
-      break;
 
     case KEY_VALUE_NO_SAVE_AND_EXIT_PK:
     case KEY_VALUE_NO_SAVE_AND_EXIT_KEK:
     case KEY_VALUE_NO_SAVE_AND_EXIT_DB:
     case KEY_VALUE_NO_SAVE_AND_EXIT_DBX:
     case KEY_VALUE_NO_SAVE_AND_EXIT_DBT:
-      if (Private->FileContext->FHandle != NULL) {
-        CloseFile (Private->FileContext->FHandle);
-        Private->FileContext->FHandle = NULL;
-        Private->FileContext->FileName = NULL;
-      }
+      CloseEnrolledFile(Private->FileContext);
 
       if (Private->SignatureGUID != NULL) {
         FreePool (Private->SignatureGUID);
         Private->SignatureGUID = NULL;
       }
-      *ActionRequest = EFI_BROWSER_ACTION_REQUEST_EXIT;
       break;
-
+    }
+  } else if (Action == EFI_BROWSER_ACTION_CHANGED) {
+    switch (QuestionId) {
+    case KEY_SECURE_BOOT_ENABLE:
+      *ActionRequest = EFI_BROWSER_ACTION_REQUEST_FORM_APPLY;
+      break;
     case KEY_SECURE_BOOT_MODE:
       mIsEnterSecureBootForm = FALSE;
       break;
-
     case KEY_SECURE_BOOT_KEK_GUID:
     case KEY_SECURE_BOOT_SIGNATURE_GUID_DB:
     case KEY_SECURE_BOOT_SIGNATURE_GUID_DBX:
     case KEY_SECURE_BOOT_SIGNATURE_GUID_DBT:
       ASSERT (Private->SignatureGUID != NULL);
-      Status = StringToGuid (
-                 IfrNvData->SignatureGuid,
-                 StrLen (IfrNvData->SignatureGuid),
-                 Private->SignatureGUID
-                 );
-      if (EFI_ERROR (Status)) {
+      RStatus = StrToGuid (IfrNvData->SignatureGuid, Private->SignatureGUID);
+      if (RETURN_ERROR (RStatus) || (IfrNvData->SignatureGuid[GUID_STRING_LENGTH] != L'\0')) {
+        Status = EFI_INVALID_PARAMETER;
         break;
       }
 
       *ActionRequest = EFI_BROWSER_ACTION_REQUEST_FORM_APPLY;
       break;
-
     case KEY_SECURE_BOOT_DELETE_PK:
       GetVariable2 (EFI_SETUP_MODE_NAME, &gEfiGlobalVariableGuid, (VOID**)&SetupMode, NULL);
       if (SetupMode == NULL || (*SetupMode) == SETUP_MODE) {
@@ -3543,20 +3874,15 @@ SecureBootCallback (
       }
       break;
     default:
-      if (QuestionId >= FILE_OPTION_OFFSET && QuestionId < FILE_OPTION_GOTO_OFFSET) {
-        if (UpdateFileExplorer (Private, QuestionId)) {
-          *ActionRequest = EFI_BROWSER_ACTION_REQUEST_EXIT;
-        }
-      }
       break;
     }
   } else if (Action == EFI_BROWSER_ACTION_DEFAULT_STANDARD) {
     if (QuestionId == KEY_HIDE_SECURE_BOOT) {
-      GetVariable2 (EFI_SECURE_BOOT_ENABLE_NAME, &gEfiSecureBootEnableDisableGuid, (VOID**)&SecureBootEnable, NULL);
-      if (SecureBootEnable == NULL) {
+      GetVariable2 (EFI_PLATFORM_KEY_NAME, &gEfiGlobalVariableGuid, (VOID**)&Pk, NULL);
+      if (Pk == NULL) {
         IfrNvData->HideSecureBoot = TRUE;
       } else {
-        FreePool (SecureBootEnable);
+        FreePool (Pk);
         IfrNvData->HideSecureBoot = FALSE;
       }
       Value->b = IfrNvData->HideSecureBoot;
@@ -3575,11 +3901,19 @@ SecureBootCallback (
     }
   }
 
+EXIT:
+
   if (!EFI_ERROR (Status)) {
     BufferSize = sizeof (SECUREBOOT_CONFIGURATION);
     HiiSetBrowserData (&gSecureBootConfigFormSetGuid, mSecureBootStorageName, BufferSize, (UINT8*) IfrNvData, NULL);
   }
+
   FreePool (IfrNvData);
+
+  if (File != NULL){
+    FreePool(File);
+    File = NULL;
+  }
 
   return EFI_SUCCESS;
 }
@@ -3645,18 +3979,11 @@ InstallSecureBootConfigForm (
   PrivateData->HiiHandle = HiiHandle;
 
   PrivateData->FileContext = AllocateZeroPool (sizeof (SECUREBOOT_FILE_CONTEXT));
-  PrivateData->MenuEntry   = AllocateZeroPool (sizeof (SECUREBOOT_MENU_ENTRY));
 
-  if (PrivateData->FileContext == NULL || PrivateData->MenuEntry == NULL) {
+  if (PrivateData->FileContext == NULL) {
     UninstallSecureBootConfigForm (PrivateData);
     return EFI_OUT_OF_RESOURCES;
   }
-
-  PrivateData->FeCurrentState = FileExplorerStateInActive;
-  PrivateData->FeDisplayContext = FileExplorerDisplayUnknown;
-
-  InitializeListHead (&FsOptionMenu.Head);
-  InitializeListHead (&DirectoryMenu.Head);
 
   //
   // Init OpCode Handle and Allocate space for creation of Buffer
@@ -3737,18 +4064,11 @@ UninstallSecureBootConfigForm (
     FreePool (PrivateData->SignatureGUID);
   }
 
-  if (PrivateData->MenuEntry != NULL) {
-    FreePool (PrivateData->MenuEntry);
-  }
-
   if (PrivateData->FileContext != NULL) {
     FreePool (PrivateData->FileContext);
   }
 
   FreePool (PrivateData);
-
-  FreeMenu (&DirectoryMenu);
-  FreeMenu (&FsOptionMenu);
 
   if (mStartOpCodeHandle != NULL) {
     HiiFreeOpCodeHandle (mStartOpCodeHandle);

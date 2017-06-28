@@ -5,7 +5,7 @@
 
   Boot option manipulation
 
-Copyright (c) 2004 - 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2004 - 2017, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -1124,7 +1124,7 @@ BOpt_AppendFileName (
       // that overlap.
       //
       StrCpyS (TmpStr, MaxLen, Ptr + 3);
-      StrCpyS (LastSlash, MaxLen - (UINTN) (LastSlash - Str), TmpStr);
+      StrCpyS (LastSlash, MaxLen - ((UINTN) LastSlash - (UINTN) Str) / sizeof (CHAR16), TmpStr);
       Ptr = LastSlash;
     } else if (*Ptr == '\\' && *(Ptr + 1) == '.' && *(Ptr + 2) == '\\') {
       //
@@ -1136,7 +1136,7 @@ BOpt_AppendFileName (
       // that overlap.
       //
       StrCpyS (TmpStr, MaxLen, Ptr + 2);
-      StrCpyS (Ptr, MaxLen - (UINTN) (Ptr - Str), TmpStr);
+      StrCpyS (Ptr, MaxLen - ((UINTN) Ptr - (UINTN) Str) / sizeof (CHAR16), TmpStr);
       Ptr = LastSlash;
     } else if (*Ptr == '\\') {
       LastSlash = Ptr;
@@ -1702,7 +1702,7 @@ GetLegacyDeviceOrder (
   LegacyOrder = NULL;
   OldData     = NULL;
   DisMap      = ZeroMem (CallbackData->BmmFakeNvData.DisableMap, sizeof (CallbackData->BmmFakeNvData.DisableMap));
-  PageNum     = sizeof (PageIdList) / sizeof (PageIdList[0]);
+  PageNum     = ARRAY_SIZE (PageIdList);
   VarData     = BdsLibGetVariableAndSize (
                   VAR_LEGACY_DEV_ORDER,
                   &gEfiLegacyDevOrderVariableGuid,

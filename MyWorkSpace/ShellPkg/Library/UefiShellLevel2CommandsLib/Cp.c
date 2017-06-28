@@ -2,7 +2,7 @@
   Main file for cp shell level 2 function.
 
   (C) Copyright 2015 Hewlett-Packard Development Company, L.P.<BR>
-  Copyright (c) 2009 - 2015, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2009 - 2016, Intel Corporation. All rights reserved.<BR>
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
   which accompanies this distribution.  The full text of the license may be found at
@@ -35,7 +35,6 @@
   @retval SHELL_OUT_OF_RESOURCES    a memory allocation failed
 **/
 SHELL_STATUS
-EFIAPI
 ValidateAndCopyFiles(
   IN CONST EFI_SHELL_FILE_INFO  *FileList,
   IN CONST CHAR16               *DestDir,
@@ -58,7 +57,6 @@ ValidateAndCopyFiles(
   @retval SHELL_SUCCESS   The source file was copied to the destination
 **/
 SHELL_STATUS
-EFIAPI
 CopySingleFile(
   IN CONST CHAR16 *Source,
   IN CONST CHAR16 *Dest,
@@ -229,7 +227,10 @@ CopySingleFile(
       // copy data between files
       //
       Buffer = AllocateZeroPool(ReadSize);
-      ASSERT(Buffer != NULL);
+      if (Buffer == NULL) {
+        ShellPrintHiiEx (-1, -1, NULL, STRING_TOKEN (STR_GEN_OUT_MEM), gShellLevel2HiiHandle, CmdName);
+        return SHELL_OUT_OF_RESOURCES;
+      }
       while (ReadSize == PcdGet32(PcdShellFileOperationSize) && !EFI_ERROR(Status)) {
         Status = ShellReadFile(SourceHandle, &ReadSize, Buffer);
         if (!EFI_ERROR(Status)) {
@@ -288,7 +289,6 @@ CopySingleFile(
   @retval SHELL_OUT_OF_RESOURCES    a memory allocation failed
 **/
 SHELL_STATUS
-EFIAPI
 ValidateAndCopyFiles(
   IN CONST EFI_SHELL_FILE_INFO  *FileList,
   IN CONST CHAR16               *DestDir,
@@ -360,7 +360,7 @@ ValidateAndCopyFiles(
 
     NewSize =  StrSize(CleanFilePathStr);
     NewSize += StrSize(Node->FullName);
-    NewSize += (Cwd == NULL)? 0 : StrSize(Cwd);
+    NewSize += (Cwd == NULL)? 0 : (StrSize(Cwd) + sizeof(CHAR16));
     if (NewSize > PathSize) {
       PathSize = NewSize;
     }
@@ -428,6 +428,7 @@ ValidateAndCopyFiles(
         //
         if (Cwd != NULL) {
           StrCpyS(DestPath, PathSize / sizeof(CHAR16), Cwd);
+          StrCatS(DestPath, PathSize / sizeof(CHAR16), L"\\");
         } else {
           ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_DIR_NF), gShellLevel2HiiHandle, L"cp", CleanFilePathStr);  
           FreePool (CleanFilePathStr);
@@ -456,6 +457,7 @@ ValidateAndCopyFiles(
          //
         if (Cwd != NULL) {
           StrCpyS(DestPath, PathSize/sizeof(CHAR16), Cwd);
+          StrCatS(DestPath, PathSize/sizeof(CHAR16), L"\\");
         } else {
           ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_DIR_NF), gShellLevel2HiiHandle, L"cp",  CleanFilePathStr); 
           FreePool(CleanFilePathStr);
@@ -467,6 +469,7 @@ ValidateAndCopyFiles(
       } else if (StrStr(CleanFilePathStr, L":") == NULL) {
         if (Cwd != NULL) {
           StrCpyS(DestPath, PathSize/sizeof(CHAR16), Cwd);
+          StrCatS(DestPath, PathSize/sizeof(CHAR16), L"\\");
         } else {
           ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_DIR_NF), gShellLevel2HiiHandle, L"cp", CleanFilePathStr);  
           FreePool(CleanFilePathStr);
@@ -570,7 +573,6 @@ ValidateAndCopyFiles(
   @retval SHELL_SUCCESS             The operation was successful.
 **/
 SHELL_STATUS
-EFIAPI
 ProcessValidateAndCopyFiles(
   IN       EFI_SHELL_FILE_INFO  *FileList,
   IN CONST CHAR16               *DestDir,
@@ -644,6 +646,7 @@ ShellCommandRunCp (
   BOOLEAN             SilentMode;
   BOOLEAN             RecursiveMode;
   CONST CHAR16        *Cwd;
+  CHAR16              *FullCwd;
 
   ProblemParam        = NULL;
   ShellStatus         = SHELL_SUCCESS;
@@ -712,7 +715,15 @@ ShellCommandRunCp (
             ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_FILE_NF), gShellLevel2HiiHandle, L"cp", ShellCommandLineGetRawValue(Package, 1));  
             ShellStatus = SHELL_NOT_FOUND;
           } else  {
-            ShellStatus = ProcessValidateAndCopyFiles(FileList, Cwd, SilentMode, RecursiveMode);
+            FullCwd = AllocateZeroPool(StrSize(Cwd) + sizeof(CHAR16));
+            if (FullCwd == NULL) {
+              ShellPrintHiiEx (-1, -1, NULL, STRING_TOKEN (STR_GEN_OUT_MEM), gShellLevel2HiiHandle, L"cp");
+              ShellStatus = SHELL_OUT_OF_RESOURCES;
+            } else {
+              StrCpyS (FullCwd, StrSize (Cwd) / sizeof (CHAR16) + 1, Cwd);
+              ShellStatus = ProcessValidateAndCopyFiles (FileList, FullCwd, SilentMode, RecursiveMode);
+              FreePool (FullCwd);
+            }
           }
         }
 

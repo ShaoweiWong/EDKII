@@ -1,7 +1,7 @@
 /** @file
   The implementation of EFI IPv6 Configuration Protocol.
 
-  Copyright (c) 2009 - 2014, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2009 - 2017, Intel Corporation. All rights reserved.<BR>
 
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
@@ -121,7 +121,7 @@ Ip6ConfigOnPolicyChanged (
 
   if (NewPolicy == Ip6ConfigPolicyAutomatic) {
     //
-    // Set paramters to trigger router solicitation sending in timer handler.
+    // Set parameters to trigger router solicitation sending in timer handler.
     //
     IpSb->RouterAdvertiseReceived = FALSE;
     IpSb->SolicitTimer            = IP6_MAX_RTR_SOLICITATIONS;
@@ -219,9 +219,9 @@ Ip6ConfigStartStatefulAutoConfig (
   // with DNS SERVERS.
   //
   Oro                         = (EFI_DHCP6_PACKET_OPTION *) OptBuf;
-  Oro->OpCode                 = HTONS (IP6_CONFIG_DHCP6_OPTION_ORO);
+  Oro->OpCode                 = HTONS (DHCP6_OPT_ORO);
   Oro->OpLen                  = HTONS (2);
-  *((UINT16 *) &Oro->Data[0]) = HTONS (IP6_CONFIG_DHCP6_OPTION_DNS_SERVERS);
+  *((UINT16 *) &Oro->Data[0]) = HTONS (DHCP6_OPT_DNS_SERVERS);
   OptList[0]                  = Oro;
 
   Status                      = EFI_SUCCESS;
@@ -665,36 +665,35 @@ Ip6ConfigSetPolicy (
 
     return EFI_ABORTED;
   } else {
+    //
+    // Clean the ManualAddress, Gateway and DnsServers, shrink the variable
+    // data size, and fire up all the related events.
+    //
+    DataItem           = &Instance->DataItem[Ip6ConfigDataTypeManualAddress];
+    if (DataItem->Data.Ptr != NULL) {
+      FreePool (DataItem->Data.Ptr);
+    }
+    DataItem->Data.Ptr = NULL;
+    DataItem->DataSize = 0;
+    DataItem->Status   = EFI_NOT_FOUND;
+    NetMapIterate (&DataItem->EventMap, Ip6ConfigSignalEvent, NULL);
 
-    if (NewPolicy == Ip6ConfigPolicyAutomatic) {
-      //
-      // Clean the ManualAddress, Gateway and DnsServers, shrink the variable
-      // data size, and fire up all the related events.
-      //
-      DataItem           = &Instance->DataItem[Ip6ConfigDataTypeManualAddress];
-      if (DataItem->Data.Ptr != NULL) {
-        FreePool (DataItem->Data.Ptr);
-      }
-      DataItem->Data.Ptr = NULL;
-      DataItem->DataSize = 0;
-      DataItem->Status   = EFI_NOT_FOUND;
-      NetMapIterate (&DataItem->EventMap, Ip6ConfigSignalEvent, NULL);
+    DataItem           = &Instance->DataItem[Ip6ConfigDataTypeGateway];
+    if (DataItem->Data.Ptr != NULL) {
+      FreePool (DataItem->Data.Ptr);
+    }
+    DataItem->Data.Ptr = NULL;
+    DataItem->DataSize = 0;
+    DataItem->Status   = EFI_NOT_FOUND;
+    NetMapIterate (&DataItem->EventMap, Ip6ConfigSignalEvent, NULL);
 
-      DataItem           = &Instance->DataItem[Ip6ConfigDataTypeGateway];
-      if (DataItem->Data.Ptr != NULL) {
-        FreePool (DataItem->Data.Ptr);
-      }
-      DataItem->Data.Ptr = NULL;
-      DataItem->DataSize = 0;
-      DataItem->Status   = EFI_NOT_FOUND;
-      NetMapIterate (&DataItem->EventMap, Ip6ConfigSignalEvent, NULL);
-
-      DataItem           = &Instance->DataItem[Ip6ConfigDataTypeDnsServer];
-      DataItem->Data.Ptr = NULL;
-      DataItem->DataSize = 0;
-      DataItem->Status   = EFI_NOT_FOUND;
-      NetMapIterate (&DataItem->EventMap, Ip6ConfigSignalEvent, NULL);
-    } else {
+    DataItem           = &Instance->DataItem[Ip6ConfigDataTypeDnsServer];
+    DataItem->Data.Ptr = NULL;
+    DataItem->DataSize = 0;
+    DataItem->Status   = EFI_NOT_FOUND;
+    NetMapIterate (&DataItem->EventMap, Ip6ConfigSignalEvent, NULL);
+    
+    if (NewPolicy == Ip6ConfigPolicyManual) {
       //
       // The policy is changed from automatic to manual. Stop the DHCPv6 process
       // and destroy the DHCPv6 child.
@@ -784,6 +783,10 @@ Ip6ManualAddrDadCallback (
   NET_CHECK_SIGNATURE (Instance, IP6_CONFIG_INSTANCE_SIGNATURE);
   Item       = &Instance->DataItem[Ip6ConfigDataTypeManualAddress];
   ManualAddr = NULL;
+
+  if (Item->DataSize == 0) {
+    return;
+  }
 
   for (Index = 0; Index < Item->DataSize / sizeof (EFI_IP6_CONFIG_MANUAL_ADDRESS); Index++) {
     //
@@ -1328,7 +1331,6 @@ Ip6ConfigSetDnsServer (
 {
   UINTN                 OldIndex;
   UINTN                 NewIndex;
-  UINTN                 Index1;
   EFI_IPv6_ADDRESS      *OldDns;
   EFI_IPv6_ADDRESS      *NewDns;
   UINTN                 OldDnsCount;
@@ -1367,15 +1369,10 @@ Ip6ConfigSetDnsServer (
       //
       // The dns server address must be unicast.
       //
-      FreePool (Tmp);
-      return EFI_INVALID_PARAMETER;
-    }
-
-    for (Index1 = NewIndex + 1; Index1 < NewDnsCount; Index1++) {
-      if (EFI_IP6_EQUAL (NewDns + NewIndex, NewDns + Index1)) {
+      if (Tmp != NULL) {
         FreePool (Tmp);
-        return EFI_INVALID_PARAMETER;
       }
+      return EFI_INVALID_PARAMETER;
     }
 
     if (OneAdded) {
@@ -1435,11 +1432,12 @@ Ip6ConfigInitIfInfo (
   OUT EFI_IP6_CONFIG_INTERFACE_INFO  *IfInfo
   )
 {
-  IfInfo->Name[0] = L'e';
-  IfInfo->Name[1] = L't';
-  IfInfo->Name[2] = L'h';
-  IfInfo->Name[3] = (CHAR16) (L'0' + IpSb->Ip6ConfigInstance.IfIndex);
-  IfInfo->Name[4] = 0;
+  UnicodeSPrint (
+    IfInfo->Name,
+    sizeof (IfInfo->Name),
+    L"eth%d",
+    IpSb->Ip6ConfigInstance.IfIndex
+  );
 
   IfInfo->IfType        = IpSb->SnpMode.IfType;
   IfInfo->HwAddressSize = IpSb->SnpMode.HwAddressSize;
@@ -1508,7 +1506,7 @@ Ip6ConfigParseDhcpReply (
     CopyMem (&OpCode, &OptList[Index]->OpCode, sizeof (OpCode));
     OpCode = NTOHS (OpCode);
 
-    if (OpCode == IP6_CONFIG_DHCP6_OPTION_DNS_SERVERS) {
+    if (OpCode == DHCP6_OPT_DNS_SERVERS) {
       CopyMem (&Length, &OptList[Index]->OpLen, sizeof (Length));
       Length = NTOHS (Length);
 
@@ -2209,7 +2207,7 @@ Ip6ConfigInitInstance (
   DataItem->SetData  = Ip6ConfigSetPolicy;
   DataItem->Data.Ptr = &Instance->Policy;
   DataItem->DataSize = sizeof (Instance->Policy);
-  Instance->Policy   = Ip6ConfigPolicyAutomatic;
+  Instance->Policy   = Ip6ConfigPolicyManual;
   SET_DATA_ATTRIB (DataItem->Attribute, DATA_ATTRIB_SIZE_FIXED);
 
   DataItem           = &Instance->DataItem[Ip6ConfigDataTypeDupAddrDetectTransmits];

@@ -1,6 +1,6 @@
 /** @file
 
-Copyright (c) 2005 - 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2005 - 2017, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -550,6 +550,7 @@ Ip4InitProtocol (
   IpInstance->Signature = IP4_PROTOCOL_SIGNATURE;
   CopyMem (&IpInstance->Ip4Proto, &mEfiIp4ProtocolTemplete, sizeof (IpInstance->Ip4Proto));
   IpInstance->State     = IP4_STATE_UNCONFIGED;
+  IpInstance->InDestroy   = FALSE;
   IpInstance->Service   = IpSb;
 
   InitializeListHead (&IpInstance->Link);
@@ -560,57 +561,6 @@ Ip4InitProtocol (
   InitializeListHead (&IpInstance->AddrLink);
 
   EfiInitializeLock (&IpInstance->RecycleLock, TPL_NOTIFY);
-}
-
-
-/**
-  The event handle for IP4 auto reconfiguration. The original default
-  interface and route table will be removed as the default.
-
-  @param[in]  Context                The IP4 service binding instance.
-
-**/
-VOID
-EFIAPI
-Ip4AutoReconfigCallBackDpc (
-  IN VOID                   *Context
-  )
-{
-  IP4_SERVICE               *IpSb;
-
-  IpSb      = (IP4_SERVICE *) Context;
-  NET_CHECK_SIGNATURE (IpSb, IP4_SERVICE_SIGNATURE);
-
-  if (IpSb->State > IP4_SERVICE_UNSTARTED) {
-    IpSb->State = IP4_SERVICE_UNSTARTED;
-  }
-  
-  IpSb->Reconfig = TRUE;
-
-  Ip4StartAutoConfig (&IpSb->Ip4Config2Instance);
-
-  return ;
-}
-
-
-/**
-  Request Ip4AutoReconfigCallBackDpc as a DPC at TPL_CALLBACK.
-
-  @param Event     The event that is signalled.
-  @param Context   The IP4 service binding instance.
-
-**/
-VOID
-EFIAPI
-Ip4AutoReconfigCallBack (
-  IN EFI_EVENT              Event,
-  IN VOID                   *Context
-  )
-{
-  //
-  // Request Ip4AutoReconfigCallBackDpc as a DPC at TPL_CALLBACK
-  //
-  QueueDpc (TPL_CALLBACK, Ip4AutoReconfigCallBackDpc, Context);
 }
 
 
@@ -724,31 +674,13 @@ Ip4ConfigProtocol (
 
   } else {
     //
-    // Use the default address. If the default configuration hasn't
-    // been started, start it.
+    // Use the default address. Check the state.
     //
     if (IpSb->State == IP4_SERVICE_UNSTARTED) {
-      //
-      // Create the ReconfigEvent to start the new configuration.
-      //
-      if (IpSb->ReconfigEvent == NULL) {
-        Status = gBS->CreateEvent (
-                        EVT_NOTIFY_SIGNAL,
-                        TPL_NOTIFY,
-                        Ip4AutoReconfigCallBack,
-                        IpSb,
-                        &IpSb->ReconfigEvent
-                        );
-
-        if (EFI_ERROR (Status)) {
-          goto ON_ERROR;
-        }
-      }
-      
       Status = Ip4StartAutoConfig (&IpSb->Ip4Config2Instance);
 
       if (EFI_ERROR (Status)) {
-        goto CLOSE_RECONFIG_EVENT;
+        goto ON_ERROR;
       }
     }
 
@@ -778,7 +710,7 @@ Ip4ConfigProtocol (
                     EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER
                     );
     if (EFI_ERROR (Status)) {
-      goto CLOSE_RECONFIG_EVENT;
+      goto ON_ERROR;
     }
   }
   InsertTailList (&IpIf->IpInstances, &IpInstance->AddrLink);
@@ -796,12 +728,6 @@ Ip4ConfigProtocol (
   }
 
   return EFI_SUCCESS;
-
-CLOSE_RECONFIG_EVENT:
-  if (IpSb->ReconfigEvent != NULL) {
-    gBS->CloseEvent (IpSb->ReconfigEvent);
-    IpSb->ReconfigEvent = NULL;
-  }
 
 ON_ERROR:
   Ip4FreeRouteTable (IpInstance->RouteTable);
@@ -881,66 +807,6 @@ Ip4CleanProtocol (
   NetMapClean (&IpInstance->RxTokens);
 
   return EFI_SUCCESS;
-}
-
-
-/**
-  Validate that Ip/Netmask pair is OK to be used as station
-  address. Only continuous netmasks are supported. and check
-  that StationAddress is a unicast address on the newtwork.
-
-  @param[in]  Ip                 The IP address to validate.
-  @param[in]  Netmask            The netmaks of the IP.
-
-  @retval TRUE                   The Ip/Netmask pair is valid.
-  @retval FALSE                  The Ip/Netmask pair is invalid.
-
-**/
-BOOLEAN
-Ip4StationAddressValid (
-  IN IP4_ADDR               Ip,
-  IN IP4_ADDR               Netmask
-  )
-{
-  IP4_ADDR                  NetBrdcastMask;
-  INTN                      Len;
-  INTN                      Type;
-
-  //
-  // Only support the station address with 0.0.0.0/0 to enable DHCP client.
-  //
-  if (Netmask == IP4_ALLZERO_ADDRESS) {
-    return (BOOLEAN) (Ip == IP4_ALLZERO_ADDRESS);
-  }
-
-  //
-  // Only support the continuous net masks
-  //
-  if ((Len = NetGetMaskLength (Netmask)) == IP4_MASK_NUM) {
-    return FALSE;
-  }
-
-  //
-  // Station address can't be class D or class E address
-  //
-  if ((Type = NetGetIpClass (Ip)) > IP4_ADDR_CLASSC) {
-    return FALSE;
-  }
-
-  //
-  // Station address can't be subnet broadcast/net broadcast address
-  //
-  if ((Ip == (Ip & Netmask)) || (Ip == (Ip | ~Netmask))) {
-    return FALSE;
-  }
-
-  NetBrdcastMask = gIp4AllMasks[MIN (Len, Type << 3)];
-
-  if (Ip == (Ip | ~NetBrdcastMask)) {
-    return FALSE;
-  }
-
-  return TRUE;
 }
 
 
@@ -1071,8 +937,7 @@ EfiIp4Configure (
     Status = Ip4CleanProtocol (IpInstance);
 
     //
-    // Don't change the state if it is DESTROY, consider the following
-    // valid sequence: Mnp is unloaded-->Ip Stopped-->Udp Stopped,
+    // Consider the following valid sequence: Mnp is unloaded-->Ip Stopped-->Udp Stopped,
     // Configure (ThisIp, NULL). If the state is changed to UNCONFIGED,
     // the unload fails miserably.
     //
@@ -2417,7 +2282,7 @@ Ip4TimerTicking (
   //
   // Media transimit Unpresent to Present means new link movement is detected.
   //
-  if (!OldMediaPresent && IpSb->MediaPresent) {
+  if (!OldMediaPresent && IpSb->MediaPresent && (IpSb->Ip4Config2Instance.Policy == Ip4Config2PolicyDhcp)) {
     //
     // Signal the IP4 to run the dhcp configuration again. IP4 driver will free
     // old IP address related resource, such as route table and Interface, then 

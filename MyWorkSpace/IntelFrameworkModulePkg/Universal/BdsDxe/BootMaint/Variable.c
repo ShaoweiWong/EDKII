@@ -448,7 +448,7 @@ Var_UpdateConsoleOption (
       Vendor.Header.Type    = MESSAGING_DEVICE_PATH;
       Vendor.Header.SubType = MSG_VENDOR_DP;
       
-      ASSERT (NewTerminalContext->TerminalType < (sizeof (TerminalTypeGuid) / sizeof (TerminalTypeGuid[0])));
+      ASSERT (NewTerminalContext->TerminalType < (ARRAY_SIZE (TerminalTypeGuid)));
       CopyMem (
         &Vendor.Guid,
         &TerminalTypeGuid[NewTerminalContext->TerminalType],
@@ -1370,9 +1370,11 @@ Var_UpdateConMode (
 
   Status = gST->ConOut->QueryMode (gST->ConOut, Mode, &(ModeInfo.Column), &(ModeInfo.Row));
   if (!EFI_ERROR(Status)) {
-    PcdSet32 (PcdSetupConOutColumn, (UINT32) ModeInfo.Column);
-    PcdSet32 (PcdSetupConOutRow, (UINT32) ModeInfo.Row);
+    Status = PcdSet32S (PcdSetupConOutColumn, (UINT32) ModeInfo.Column);
+    if (!EFI_ERROR (Status)){
+      Status = PcdSet32S (PcdSetupConOutRow, (UINT32) ModeInfo.Row);
+    }
   }
 
-  return EFI_SUCCESS;
+  return Status;
 }

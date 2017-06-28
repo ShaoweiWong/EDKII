@@ -1,7 +1,7 @@
 /** @file
   SEC Core Debug Agent Library instance implementition.
 
-  Copyright (c) 2010 - 2015, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2010 - 2017, Intel Corporation. All rights reserved.<BR>
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
   which accompanies this distribution.  The full text of the license may be found at
@@ -213,7 +213,7 @@ GetMailboxPointer (
     // Fix up Debug Port handler and save new mailbox in IDT entry
     //
     Mailbox = (DEBUG_AGENT_MAILBOX *)((UINTN)Mailbox + ((UINTN)(MailboxLocationInHob) - (UINTN)MailboxLocationInIdt));
-    DebugPortHandle = (UINT64)((UINTN)Mailbox->DebugPortHandle + ((UINTN)(MailboxLocationInHob) - (UINTN)MailboxLocationInIdt));
+    DebugPortHandle = (UINTN)Mailbox->DebugPortHandle + ((UINTN)(MailboxLocationInHob) - (UINTN)MailboxLocationInIdt);
     UpdateMailboxContent (Mailbox, DEBUG_MAILBOX_DEBUG_PORT_HANDLE_INDEX, DebugPortHandle);
     *MailboxLocationInHob = (UINT64)(UINTN)Mailbox;
     SetLocationSavedMailboxPointerInIdtEntry (MailboxLocationInHob);
@@ -343,7 +343,7 @@ DebugAgentCallbackMemoryDiscoveredPpi (
   function and pass it into InitializeDebugAgent(). InitializeDebugAgent() is
   responsible to invoke the passing-in function at the end of InitializeDebugAgent().
 
-  If the parameter Function is not NULL, Debug Agent Libary instance will invoke it by
+  If the parameter Function is not NULL, Debug Agent Library instance will invoke it by
   passing in the Context to be its parameter.
 
   If Function() is NULL, Debug Agent Library instance will return after setup debug
@@ -582,8 +582,8 @@ InitializeDebugAgent (
     } else {
       Ia32Idtr =  (IA32_DESCRIPTOR *) Context;
       Ia32IdtEntry = (IA32_IDT_ENTRY *)(Ia32Idtr->Base);
-      MailboxLocationPointer = (UINT64 *) (UINTN) (Ia32IdtEntry[DEBUG_MAILBOX_VECTOR].Bits.OffsetLow +
-                                         (UINT32) (Ia32IdtEntry[DEBUG_MAILBOX_VECTOR].Bits.OffsetHigh << 16));
+      MailboxLocationPointer = (UINT64 *) ((UINTN) Ia32IdtEntry[DEBUG_MAILBOX_VECTOR].Bits.OffsetLow +
+                                          ((UINTN) Ia32IdtEntry[DEBUG_MAILBOX_VECTOR].Bits.OffsetHigh << 16));
       Mailbox = (DEBUG_AGENT_MAILBOX *) (UINTN)(*MailboxLocationPointer);
       //
       // Mailbox should valid and setup before executing thunk code
@@ -648,10 +648,10 @@ InitializeDebugAgent (
 /**
   Caller provided function to be invoked at the end of DebugPortInitialize().
 
-  Refer to the descrption for DebugPortInitialize() for more details.
+  Refer to the description for DebugPortInitialize() for more details.
 
   @param[in] Context           The first input argument of DebugPortInitialize().
-  @param[in] DebugPortHandle   Debug port handle created by Debug Communication Libary.
+  @param[in] DebugPortHandle   Debug port handle created by Debug Communication Library.
 
 **/
 VOID

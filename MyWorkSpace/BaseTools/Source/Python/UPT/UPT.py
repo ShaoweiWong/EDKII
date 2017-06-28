@@ -2,7 +2,7 @@
 #
 # This file is the main entry for UPT 
 #
-# Copyright (c) 2011 - 2015, Intel Corporation. All rights reserved.<BR>
+# Copyright (c) 2011 - 2017, Intel Corporation. All rights reserved.<BR>
 #
 # This program and the accompanying materials are licensed and made available 
 # under the terms and conditions of the BSD License which accompanies this 
@@ -19,8 +19,13 @@ UPT
 
 ## import modules
 #
-from Core import FileHook
+import locale
 import sys
+encoding = locale.getdefaultlocale()[1]
+if encoding:
+    reload(sys)
+    sys.setdefaultencoding(encoding)
+from Core import FileHook
 import os.path
 from sys import platform
 import platform as pf
@@ -39,12 +44,14 @@ from Logger.ToolError import FILE_TYPE_MISMATCH
 from Logger.ToolError import OPTION_CONFLICT
 from Logger.ToolError import FatalError
 from Logger.ToolError import UPT_ALREADY_INSTALLED_ERROR
+from Common.MultipleWorkspace import MultipleWorkspace as mws
 
 import MkPkg
 import InstallPkg
 import RmPkg
 import InventoryWs
 import ReplacePkg
+import TestInstall
 from Library.Misc import GetWorkspace
 from Library import GlobalData
 from Core.IpiDb import IpiDatabase
@@ -67,6 +74,9 @@ def CheckConflictOption(Opt):
     elif Opt.PackFileToInstall and Opt.PackFileToRemove:
         Logger.Error("UPT", OPTION_CONFLICT, ExtraData=ST.ERR_I_R_EXCLUSIVE)
     elif Opt.PackFileToCreate and  Opt.PackFileToRemove:
+        Logger.Error("UPT", OPTION_CONFLICT, ExtraData=ST.ERR_C_R_EXCLUSIVE)
+    elif Opt.TestDistFiles and (Opt.PackFileToCreate or Opt.PackFileToInstall \
+                                or Opt.PackFileToRemove or Opt.PackFileToReplace):
         Logger.Error("UPT", OPTION_CONFLICT, ExtraData=ST.ERR_C_R_EXCLUSIVE)
 
     if Opt.CustomPath and Opt.UseGuidedPkgPath:
@@ -98,7 +108,7 @@ def SetLogLevel(Opt):
 def Main():
     Logger.Initialize()
 
-    Parser = OptionParser(version=(MSG_VERSION + ' ' + gBUILD_VERSION), description=MSG_DESCRIPTION,
+    Parser = OptionParser(version=(MSG_VERSION + ' Build ' + gBUILD_VERSION), description=MSG_DESCRIPTION,
                           prog="UPT.exe", usage=MSG_USAGE)
 
     Parser.add_option("-d", "--debug", action="store", type="int", dest="debug_level", help=ST.HLP_PRINT_DEBUG_INFO)
@@ -145,6 +155,9 @@ def Main():
 
     Parser.add_option("--use-guided-paths", action="store_true", dest="Use_Guided_Paths", help=ST.HLP_USE_GUIDED_PATHS)
 
+    Parser.add_option("-j", "--test-install", action="append", type="string",
+                      dest="Test_Install_Distribution_Package_Files", help=ST.HLP_TEST_INSTALL)
+
     Opt = Parser.parse_args()[0]
 
     Var2Var = [
@@ -158,27 +171,29 @@ def Main():
         ("PackFileToReplace", Opt.Replace_Distribution_Package_File),
         ("PackFileToBeReplaced", Opt.Original_Distribution_Package_File),
         ("UseGuidedPkgPath", Opt.Use_Guided_Paths),
+        ("TestDistFiles", Opt.Test_Install_Distribution_Package_Files)
     ]
 
     for Var in Var2Var:
         setattr(Opt, Var[0], Var[1])
 
     try:
-        GlobalData.gWORKSPACE = GetWorkspace()
+        GlobalData.gWORKSPACE, GlobalData.gPACKAGE_PATH = GetWorkspace()
     except FatalError, XExcept:
         if Logger.GetLevel() <= Logger.DEBUG_9:
             Logger.Quiet(ST.MSG_PYTHON_ON % (python_version(), platform) + format_exc())
         return XExcept.args[0]
 
-    # Start *********************************************
     # Support WORKSPACE is a long path
-    # Only work well on windows
-    # Linux Solution TBD
+    # Only works for windows system
     if pf.system() == 'Windows':
-        os.system('@echo off\nsubst b: /D')
-        os.system('subst b: "%s"' % GlobalData.gWORKSPACE)
-        GlobalData.gWORKSPACE = 'B:\\'
-    # End ***********************************************
+        Vol = 'B:'
+        for Index in range(90, 65, -1):
+            Vol = chr(Index) + ':'
+            if not os.path.isdir(Vol):
+                os.system('subst %s "%s"' % (Vol, GlobalData.gWORKSPACE))
+                break
+        GlobalData.gWORKSPACE = '%s\\' % Vol
 
     WorkspaceDir = GlobalData.gWORKSPACE
 
@@ -264,6 +279,14 @@ def Main():
             Opt.PackFileToReplace = AbsPath
             RunModule = ReplacePkg.Main
 
+        elif Opt.Test_Install_Distribution_Package_Files:
+            for Dist in Opt.Test_Install_Distribution_Package_Files:
+                if not Dist.endswith('.dist'):
+                    Logger.Error("TestInstall", FILE_TYPE_MISMATCH, ExtraData=ST.ERR_DIST_EXT_ERROR % Dist)
+
+            setattr(Opt, 'DistFiles', Opt.Test_Install_Distribution_Package_Files)
+            RunModule = TestInstall.Main
+
         else:
             Parser.print_usage()
             return OPTION_MISSING
@@ -287,8 +310,9 @@ def Main():
         except StandardError:
             Logger.Quiet(ST.MSG_RECOVER_FAIL)
         GlobalData.gDB.CloseDb()
+
         if pf.system() == 'Windows':
-            os.system('subst b: /D')
+            os.system('subst %s /D' % GlobalData.gWORKSPACE.replace('\\',''))
 
     return ReturnCode
 

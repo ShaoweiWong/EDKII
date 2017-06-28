@@ -22,7 +22,7 @@
   * functions are non-interactive only
 
   Copyright (c) 2014 Hewlett-Packard Development Company, L.P.
-  Copyright (c) 2009 - 2014, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2009 - 2015, Intel Corporation. All rights reserved.<BR>
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
   which accompanies this distribution.  The full text of the license may be found at
@@ -99,7 +99,7 @@ ShellLevel2CommandsLibConstructor (
   ShellCommandRegisterCommandName(L"vol",      ShellCommandRunVol     , ShellCommandGetManFileNameLevel2, 2, L"", TRUE, gShellLevel2HiiHandle, STRING_TOKEN(STR_GET_HELP_VOL)    );
 
   //
-  // support for permenant (built in) aliases
+  // support for permanent (built in) aliases
   //
   ShellCommandRegisterAlias(L"rm", L"del");
   ShellCommandRegisterAlias(L"ls", L"dir");
@@ -169,7 +169,6 @@ ShellLevel2CommandsLibDestructor (
   @retval other           An allocated pointer to a fuly qualified path.
 **/
 CHAR16*
-EFIAPI
 GetFullyQualifiedPath(
   IN CONST CHAR16* Path
   )
@@ -188,6 +187,7 @@ GetFullyQualifiedPath(
   if (StrStr(Path, L":") == NULL) {
     CurDir = gEfiShellProtocol->GetCurDir(NULL);
     StrnCatGrow(&PathToReturn, &Size, CurDir, 0);
+    StrnCatGrow(&PathToReturn, &Size, L"\\", 0);
     if (*Path == L'\\') {
       Path++;
     }
@@ -215,7 +215,6 @@ GetFullyQualifiedPath(
   @retval EFI_SUCCESS   The operation was successful.
 **/
 EFI_STATUS
-EFIAPI
 VerifyIntermediateDirectories (
   IN CONST CHAR16 *Path
   )
@@ -269,7 +268,6 @@ VerifyIntermediateDirectories (
   @return Char as an upper case character.
 **/
 CHAR16
-EFIAPI
 InternalCharToUpper (
   IN CONST CHAR16                    Char
   );
@@ -285,7 +283,6 @@ InternalCharToUpper (
   @return The location in Source where there is a difference.
 **/
 CONST CHAR16*
-EFIAPI
 StrniCmp(
   IN CONST CHAR16 *Source,
   IN CONST CHAR16 *Target,
@@ -321,7 +318,6 @@ StrniCmp(
   @retval EFI_SUCCESS   The operation was successful.
 **/
 EFI_STATUS
-EFIAPI
 ShellLevel2StripQuotes (
   IN  CONST CHAR16     *OriginalString,
   OUT CHAR16           **CleanString

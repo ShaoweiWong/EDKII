@@ -2,7 +2,7 @@
   Main file for attrib shell level 2 function.
 
   (C) Copyright 2015 Hewlett-Packard Development Company, L.P.<BR>
-  Copyright (c) 2009 - 2010, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2009 - 2015, Intel Corporation. All rights reserved.<BR>
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
   which accompanies this distribution.  The full text of the license may be found at
@@ -24,7 +24,6 @@
   @return any return code from GetNextVariableName except EFI_NOT_FOUND
 **/
 SHELL_STATUS
-EFIAPI
 PrintAllShellEnvVars(
   VOID
   )
@@ -141,6 +140,11 @@ ShellCommandRunSet (
         // assigning one
         //
         Status = ShellSetEnvironmentVariable(KeyName, Value, ShellCommandLineGetFlag(Package, L"-v"));
+        if (EFI_ERROR(Status)) {
+          ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_SET_ERROR_SET), gShellLevel2HiiHandle, L"set", KeyName);
+          ShellStatus = (SHELL_STATUS) (Status & (~MAX_BIT));
+        }
+        
       } else {
         if (KeyName != NULL) {
           //

@@ -1,7 +1,7 @@
 /** @file
   Header file for NV data structure definition.
 
-Copyright (c) 2011 - 2014, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2011 - 2017, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -36,15 +36,9 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #define SECUREBOOT_DELETE_SIGNATURE_FROM_DB   0x0c
 #define SECUREBOOT_ENROLL_SIGNATURE_TO_DBX    0x0d
 #define SECUREBOOT_DELETE_SIGNATURE_FROM_DBX  0x0e
-#define FORM_FILE_EXPLORER_ID                 0x0f
-#define FORM_FILE_EXPLORER_ID_PK              0x10
-#define FORM_FILE_EXPLORER_ID_KEK             0x11
-#define FORM_FILE_EXPLORER_ID_DB              0x12
-#define FORM_FILE_EXPLORER_ID_DBX             0x13
 #define FORMID_SECURE_BOOT_DBT_OPTION_FORM    0x14
 #define SECUREBOOT_ENROLL_SIGNATURE_TO_DBT    0x15
 #define SECUREBOOT_DELETE_SIGNATURE_FROM_DBT  0x16
-#define FORM_FILE_EXPLORER_ID_DBT             0x17
 
 #define SECURE_BOOT_MODE_CUSTOM               0x01
 #define SECURE_BOOT_MODE_STANDARD             0x00
@@ -84,6 +78,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #define LABEL_DBT_DELETE                      0x1203
 #define LABEL_END                             0xffff
 
+
 #define SECURE_BOOT_MAX_ATTEMPTS_NUM          255
 
 #define CONFIG_OPTION_OFFSET                  0x2000
@@ -109,12 +104,13 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 //
 #define OPTION_DEL_DBT_QUESTION_ID            0x5000
 
-#define FILE_OPTION_GOTO_OFFSET               0xC000
-#define FILE_OPTION_OFFSET                    0x8000
-#define FILE_OPTION_MASK                      0x3FFF
-
 #define SECURE_BOOT_GUID_SIZE                 36
 #define SECURE_BOOT_GUID_STORAGE_SIZE         37
+
+#define UNKNOWN_FILE_TYPE                     0
+#define X509_CERT_FILE_TYPE                   1
+#define PE_IMAGE_FILE_TYPE                    2
+#define AUTHENTICATION_2_FILE_TYPE            3
 
 //
 // Nv Data structure referenced by IFR
@@ -131,6 +127,7 @@ typedef struct {
   UINT8   CertificateFormat;   // The type of the certificate
   EFI_HII_DATE RevocationDate; // The revocation date of the certificate
   EFI_HII_TIME RevocationTime; // The revocation time of the certificate
+  UINT8   FileEnrollType;      // File type of sigunature enroll
 } SECUREBOOT_CONFIGURATION;
 
 #endif

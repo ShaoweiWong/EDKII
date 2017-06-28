@@ -26,7 +26,7 @@
   Depex - Dependency Expresion.
   SOR   - Schedule On Request - Don't schedule if this bit is set.
 
-Copyright (c) 2006 - 2014, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2006 - 2017, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -392,25 +392,6 @@ CoreTrust (
   return EFI_NOT_FOUND;
 }
 
-
-/**
-  An empty function to pass error checking of CreateEventEx ().
-
-  @param  Event                 Event whose notification function is being invoked.
-  @param  Context               Pointer to the notification function's context,
-                                which is implementation-dependent.
-
-**/
-VOID
-EFIAPI
-CoreEmptyCallbackFunction (
-  IN EFI_EVENT                Event,
-  IN VOID                     *Context
-  )
-{
-  return;
-}
-
 /**
   This is the main Dispatcher for DXE and it exits when there are no more
   drivers to run. Drain the mScheduledQueue and load and start a PE
@@ -451,7 +432,7 @@ CoreDispatcher (
   Status = CoreCreateEventEx (
              EVT_NOTIFY_SIGNAL,
              TPL_NOTIFY,
-             CoreEmptyCallbackFunction,
+             EfiEventEmptyFunction,
              NULL,
              &gEfiEventDxeDispatchGuid,
              &DxeDispatchEvent
@@ -792,7 +773,7 @@ FvIsBeingProcesssed (
     for (Link = mFvHandleList.ForwardLink; Link != &mFvHandleList; Link = Link->ForwardLink) {
       KnownHandle = CR(Link, KNOWN_HANDLE, Link, KNOWN_HANDLE_SIGNATURE);
       if (CompareGuid (&FvNameGuid, &KnownHandle->FvNameGuid)) {
-        DEBUG ((EFI_D_ERROR, "FvImage on FvHandle %p and %p has the same FvNameGuid %g.\n", FvHandle, KnownHandle->Handle, FvNameGuid));
+        DEBUG ((EFI_D_ERROR, "FvImage on FvHandle %p and %p has the same FvNameGuid %g.\n", FvHandle, KnownHandle->Handle, &FvNameGuid));
         return NULL;
       }
     }
@@ -1249,29 +1230,6 @@ CoreFwVolEventProtocolNotify (
             }
 
             //
-            // Check if this EFI_FV_FILETYPE_FIRMWARE_VOLUME_IMAGE file has PEI depex section.
-            //
-            DepexBuffer  = NULL;
-            SizeOfBuffer = 0;
-            Status = Fv->ReadSection (
-                           Fv,
-                           &NameGuid,
-                           EFI_SECTION_PEI_DEPEX,
-                           0,
-                           &DepexBuffer,
-                           &SizeOfBuffer,
-                           &AuthenticationStatus
-                           );
-            if (!EFI_ERROR (Status)) {
-              //
-              // If PEI depex section is found, this FV image will be ignored in DXE phase.
-              // Now, DxeCore doesn't support FV image with more one type DEPEX section.
-              //
-              FreePool (DepexBuffer);
-              continue;
-            }
-
-            //
             // Check if this EFI_FV_FILETYPE_FIRMWARE_VOLUME_IMAGE file has SMM depex section.
             //
             DepexBuffer  = NULL;
@@ -1287,11 +1245,11 @@ CoreFwVolEventProtocolNotify (
                            );
             if (!EFI_ERROR (Status)) {
               //
-              // If SMM depex section is found, this FV image will be ignored in DXE phase.
-              // Now, DxeCore doesn't support FV image with more one type DEPEX section.
+              // If SMM depex section is found, this FV image is invalid to be supported.
+              // ASSERT FALSE to report this FV image.  
               //
               FreePool (DepexBuffer);
-              continue;
+              ASSERT (FALSE);
             }
 
             //

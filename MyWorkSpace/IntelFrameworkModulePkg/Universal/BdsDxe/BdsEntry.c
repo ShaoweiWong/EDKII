@@ -5,7 +5,7 @@
   After DxeCore finish DXE phase, gEfiBdsArchProtocolGuid->BdsEntry will be invoked
   to enter BDS phase.
 
-Copyright (c) 2004 - 2014, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2004 - 2017, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -83,24 +83,6 @@ BdsInitialize (
   return Status;
 }
 
-
-/**
-  An empty function to pass error checking of CreateEventEx ().
-
-  @param  Event                 Event whose notification function is being invoked.
-  @param  Context               Pointer to the notification function's context,
-                                which is implementation-dependent.
-
-**/
-VOID
-EFIAPI
-BdsEmptyCallbackFunction (
-  IN EFI_EVENT                Event,
-  IN VOID                     *Context
-  )
-{
-}
-
 /**
 
   This function attempts to boot for the boot order specified
@@ -144,7 +126,7 @@ BdsBootDeviceSelect (
     Status = gBS->CreateEventEx (
                     EVT_NOTIFY_SIGNAL,
                     TPL_CALLBACK,
-                    BdsEmptyCallbackFunction,
+                    EfiEventEmptyFunction,
                     NULL,
                     &gConnectConInEventGuid,
                     &ConnectConInEvent
@@ -581,7 +563,7 @@ BdsEntry (
   Status = gBS->LocateProtocol (&gEdkiiVariableLockProtocolGuid, NULL, (VOID **) &VariableLock);
   DEBUG ((EFI_D_INFO, "[BdsDxe] Locate Variable Lock protocol - %r\n", Status));
   if (!EFI_ERROR (Status)) {
-    for (Index = 0; Index < sizeof (mReadOnlyVariables) / sizeof (mReadOnlyVariables[0]); Index++) {
+    for (Index = 0; Index < ARRAY_SIZE (mReadOnlyVariables); Index++) {
       Status = VariableLock->RequestToLock (VariableLock, mReadOnlyVariables[Index], &gEfiGlobalVariableGuid);
       ASSERT_EFI_ERROR (Status);
     }

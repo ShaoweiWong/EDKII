@@ -1,3 +1,22 @@
+T201706281858
+Download UDK2017:
+    1. UDK2017
+       https://github.com/tianocore/tianocore.github.io/wiki/UDK2017
+    2. edk2-vUDK2017.zip
+       https://github.com/tianocore/edk2/archive/vUDK2017.zip
+    3. How to Build UDK2017
+       https://github.com/tianocore/tianocore.github.io/wiki/UDK2017-How-to-Build
+    4. BaseTools for Windows
+       git server: https://github.com/tianocore/edk2-BaseTools-win32.git
+       git hash:   0e088c19ab31fccd1d2f55d9e4fe0314b57c0097
+       BaseTools Win32 Binaries based on last change revision: 24763, HEAD: 24776.
+       Rename this folder from edk2-BaseTools-win32 to win32, then copy the win32 directory into the BaseTools/Bin directory under the workspace.
+    5. Remove .gitignore
+       MyWorkSpace\.gitignore
+       MyWorkSpace\BaseTools\.gitignore
+       MyWorkSpace\Conf\.gitignore
+       MyWorkSpace\CryptoPkg\.gitignore
+
 T201706260910
 Generate MyWorkSpace/Config
     1. Remove MyWorkSpace/Config/.gitignore

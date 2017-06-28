@@ -1,9 +1,9 @@
 /** @file
   PCD DXE driver manage all PCD entry initialized in PEI phase and DXE phase, and
   produce the implementation of native PCD protocol and EFI_PCD_PROTOCOL defined in
-  PI 1.2 Vol3.
+  PI 1.4a Vol3.
 
-Copyright (c) 2006 - 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2006 - 2017, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -239,7 +239,7 @@ DxeGetPcdInfoGetSku (
   VOID
   )
 {
-  return mPcdDatabase.DxeDb->SystemSkuId;
+  return (UINTN) mPcdDatabase.DxeDb->SystemSkuId;
 }
 
 /**
@@ -252,7 +252,7 @@ DxeGetPcdInfoGetSku (
   or multiple values, where each value is associated with a specific SKU Id. Items with multiple, 
   SKU-specific values are called SKU enabled. 
   
-  The SKU Id of zero is reserved as a default. The valid SkuId range is 1 to 255.  
+  The SKU Id of zero is reserved as a default.
   For tokens that are not SKU enabled, the system ignores any set SKU Id and works with the 
   single value for that token. For SKU-enabled tokens, the system will use the SKU Id set by the 
   last call to SetSku(). If no SKU Id is set or the currently set SKU Id isn't valid for the specified token, 
@@ -272,19 +272,38 @@ DxePcdSetSku (
   SKU_ID    *SkuIdTable;
   UINTN     Index;
 
+  if (SkuId == mPcdDatabase.DxeDb->SystemSkuId) {
+    //
+    // The input SKU Id is equal to current SKU Id, return directly.
+    //
+    return;
+  }
+
+  if (mPcdDatabase.DxeDb->SystemSkuId != (SKU_ID) 0) {
+    DEBUG ((DEBUG_ERROR, "PcdDxe - The SKU Id could be changed only once."));
+    DEBUG ((
+      DEBUG_ERROR,
+      "PcdDxe - The SKU Id was set to 0x%lx already, it could not be set to 0x%lx any more.",
+      mPcdDatabase.DxeDb->SystemSkuId,
+      (SKU_ID) SkuId
+      ));
+    ASSERT (FALSE);
+    return;
+  }
+
   SkuIdTable = (SKU_ID *) ((UINT8 *) mPcdDatabase.DxeDb + mPcdDatabase.DxeDb->SkuIdTableOffset);
   for (Index = 0; Index < SkuIdTable[0]; Index++) {
     if (SkuId == SkuIdTable[Index + 1]) {
+      DEBUG ((EFI_D_INFO, "PcdDxe - Set current SKU Id to 0x%lx.\n", (SKU_ID) SkuId));
       mPcdDatabase.DxeDb->SystemSkuId = (SKU_ID) SkuId;
       return;
     }
   }
 
   //
-  // Invalid input SkuId, the default SKU Id will be used for the system.
+  // Invalid input SkuId, the default SKU Id will be still used for the system.
   //
-  DEBUG ((EFI_D_INFO, "PcdDxe - Invalid input SkuId, the default SKU Id will be used.\n"));
-  mPcdDatabase.DxeDb->SystemSkuId = (SKU_ID) 0;
+  DEBUG ((EFI_D_INFO, "PcdDxe - Invalid input SkuId, the default SKU Id will be still used.\n"));
   return;
 }
 
@@ -1277,6 +1296,7 @@ DxePcdGetNextTokenSpace (
                             (EFI_GUID *)((UINT8 *)mPcdDatabase.PeiDb + mPcdDatabase.PeiDb->GuidTableOffset)
                             );
       CopyMem (TmpTokenSpaceBuffer, PeiTokenSpaceTable, sizeof (EFI_GUID*) * PeiTokenSpaceTableSize);
+      TmpTokenSpaceBufferCount = PeiTokenSpaceTableSize;
       FreePool (PeiTokenSpaceTable);
     }
 

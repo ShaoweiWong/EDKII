@@ -59,7 +59,7 @@ CONST UINT8 mRsaE[] = { 0x01, 0x00, 0x01 };
   @param SectionAttribute   The attribute of the input guided section.
 
   @retval EFI_SUCCESS            The size of destination buffer, the size of scratch buffer and 
-                                 the attribute of the input section are successull retrieved.
+                                 the attribute of the input section are successfully retrieved.
   @retval EFI_INVALID_PARAMETER  The GUID in InputSection does not match this instance guid.
 
 **/
@@ -86,7 +86,7 @@ Rsa2048Sha256GuidedSectionGetInfo (
     //
     *SectionAttribute  = ((EFI_GUID_DEFINED_SECTION2 *) InputSection)->Attributes;
     *ScratchBufferSize = 0;
-    *OutputBufferSize  = SECTION2_SIZE (InputSection) - ((EFI_GUID_DEFINED_SECTION2 *) InputSection)->DataOffset;
+    *OutputBufferSize  = SECTION2_SIZE (InputSection) - sizeof(RSA_2048_SHA_256_SECTION2_HEADER);
   } else {
     //
     // Check whether the input guid section is recognized.
@@ -101,7 +101,7 @@ Rsa2048Sha256GuidedSectionGetInfo (
     //
     *SectionAttribute  = ((EFI_GUID_DEFINED_SECTION *) InputSection)->Attributes;
     *ScratchBufferSize = 0;
-    *OutputBufferSize  = SECTION_SIZE (InputSection) - ((EFI_GUID_DEFINED_SECTION *) InputSection)->DataOffset;
+    *OutputBufferSize  = SECTION_SIZE (InputSection) - sizeof(RSA_2048_SHA_256_SECTION_HEADER);
   }
 
   return EFI_SUCCESS;

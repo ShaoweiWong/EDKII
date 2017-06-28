@@ -2,7 +2,7 @@
   Main file for Alias shell level 3 function.
 
   (C) Copyright 2015 Hewlett-Packard Development Company, L.P.<BR>
-  Copyright (c) 2009 - 2014, Intel Corporation. All rights reserved. <BR>
+  Copyright (c) 2009 - 2017, Intel Corporation. All rights reserved. <BR>
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
   which accompanies this distribution.  The full text of the license may be found at
@@ -24,7 +24,6 @@
   @return any return code from GetNextVariableName except EFI_NOT_FOUND
 **/
 SHELL_STATUS
-EFIAPI
 PrintAllShellAlias(
   VOID
   )
@@ -92,6 +91,8 @@ ShellCommandRunAlias (
   CONST CHAR16        *Param1;
   CONST CHAR16        *Param2;
   CHAR16              *CleanParam2;
+  CONST CHAR16        *ConstAliasVal;
+  BOOLEAN             Volatile;
 
   ProblemParam        = NULL;
   ShellStatus         = SHELL_SUCCESS;
@@ -150,6 +151,18 @@ ShellCommandRunAlias (
       // delete an alias
       //
       Status = gEfiShellProtocol->SetAlias(Param1, NULL, TRUE, FALSE);
+      if (EFI_ERROR(Status)) {
+        if (Status == EFI_ACCESS_DENIED) {
+          ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_ERR_AD), gShellLevel3HiiHandle, L"alias");
+          ShellStatus = SHELL_ACCESS_DENIED;
+        } else if (Status == EFI_NOT_FOUND) {
+          ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_ERR_NOT_FOUND), gShellLevel3HiiHandle, L"alias", Param1);
+          ShellStatus = SHELL_NOT_FOUND;
+        } else {
+          ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_ERR_UK), gShellLevel3HiiHandle, L"alias", Status);
+          ShellStatus = SHELL_DEVICE_ERROR;
+        }
+      }
     } else if (ShellCommandLineGetCount(Package) == 3) {
       //
       // must be adding an alias
@@ -165,8 +178,19 @@ ShellCommandRunAlias (
         }
       }
     } else if (ShellCommandLineGetCount(Package) == 2) {
-      ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_TOO_FEW), gShellLevel3HiiHandle, L"alias");  
-      ShellStatus = SHELL_INVALID_PARAMETER;
+      //
+      // print out a single alias
+      //
+      ConstAliasVal = gEfiShellProtocol->GetAlias(Param1, &Volatile);
+      if (ConstAliasVal == NULL) {
+        ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_PARAM_INV), gShellLevel3HiiHandle, L"alias", Param1);
+        ShellStatus = SHELL_INVALID_PARAMETER;
+      } else {
+        if (ShellCommandIsOnAliasList(Param1)) {
+          Volatile = FALSE;
+        }
+        ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_ALIAS_OUTPUT), gShellLevel3HiiHandle, !Volatile?L' ':L'*', Param1, ConstAliasVal);
+      }      
     } else {
       ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_TOO_MANY), gShellLevel3HiiHandle, L"alias");  
       ShellStatus = SHELL_INVALID_PARAMETER;

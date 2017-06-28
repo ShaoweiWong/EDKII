@@ -1,2 +1,0 @@
-call edksetup.bat
-cmd

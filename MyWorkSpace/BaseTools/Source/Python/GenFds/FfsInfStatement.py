@@ -1,8 +1,8 @@
 ## @file
 # process FFS generation from INF statement
 #
-#  Copyright (c) 2007 - 2015, Intel Corporation. All rights reserved.<BR>
-#  Copyright (c) 2014 Hewlett-Packard Development Company, L.P.<BR>
+#  Copyright (c) 2007 - 2016, Intel Corporation. All rights reserved.<BR>
+#  Copyright (c) 2014-2016 Hewlett-Packard Development Company, L.P.<BR>
 #
 #  This program and the accompanying materials
 #  are licensed and made available under the terms and conditions of the BSD License
@@ -28,6 +28,7 @@ import Section
 import RuleSimpleFile
 import RuleComplexFile
 from CommonDataClass.FdfClass import FfsInfStatementClassObject
+from Common.MultipleWorkspace import MultipleWorkspace as mws
 from Common.String import *
 from Common.Misc import PathClass
 from Common.Misc import GuidStructureByteArrayToGuidString
@@ -42,6 +43,7 @@ from AutoGen.GenDepex import DependencyExpression
 from PatchPcdValue.PatchPcdValue import PatchBinaryFile
 from Common.LongFilePathSupport import CopyLongFilePath
 from Common.LongFilePathSupport import OpenLongFilePath as open
+import Common.GlobalData as GlobalData
 
 ## generate FFS from INF
 #
@@ -173,6 +175,10 @@ class FfsInfStatement(FfsInfStatementClassObject):
         if ErrorCode != 0:
             EdkLogger.error("GenFds", ErrorCode, ExtraData=ErrorInfo)
 
+        #
+        # Cache lower case version of INF path before processing FILE_GUID override
+        #
+        InfLowerPath = str(PathClassObj).lower()
         if self.OverrideGuid:
             PathClassObj = ProcessDuplicatedInf(PathClassObj, self.OverrideGuid, GenFdsGlobalVariable.WorkSpaceDir)
         if self.CurrentArch != None:
@@ -240,7 +246,6 @@ class FfsInfStatement(FfsInfStatementClassObject):
                 continue
             # Override Patchable PCD value by the value from DSC
             PatchPcd = None
-            InfLowerPath = str(PathClassObj).lower()
             if InfLowerPath in DscModules and PcdKey in DscModules[InfLowerPath].Pcds:
                 PatchPcd = DscModules[InfLowerPath].Pcds[PcdKey]
             elif PcdKey in Platform.Pcds:
@@ -256,7 +261,16 @@ class FfsInfStatement(FfsInfStatementClassObject):
                 DefaultValue = FdfPcdDict[PcdKey]
                 FdfOverride = True
 
-            if not DscOverride and not FdfOverride:
+            # Override Patchable PCD value by the value from Build Option
+            BuildOptionOverride = False
+            if GlobalData.BuildOptionPcd:
+                for pcd in GlobalData.BuildOptionPcd:
+                    if PcdKey == (pcd[1], pcd[0]):
+                        DefaultValue = pcd[2]
+                        BuildOptionOverride = True
+                        break
+
+            if not DscOverride and not FdfOverride and not BuildOptionOverride:
                 continue
             # Check value, if value are equal, no need to patch
             if Pcd.DatumType == "VOID*":
@@ -330,25 +344,63 @@ class FfsInfStatement(FfsInfStatementClassObject):
     #           If passed in file does not end with efi, return as is
     #
     def PatchEfiFile(self, EfiFile, FileType):
+        #
+        # If the module does not have any patches, then return path to input file
+        #  
         if not self.PatchPcds:
             return EfiFile
+
+        #
+        # Only patch file if FileType is PE32 or ModuleType is USER_DEFINED
+        #  
         if FileType != 'PE32' and self.ModuleType != "USER_DEFINED":
             return EfiFile
+
+        #
+        # Generate path to patched output file
+        #
+        Basename = os.path.basename(EfiFile)
+        Output = os.path.normpath (os.path.join(self.OutputPath, Basename))
+
+        #
+        # If this file has already been patched, then return the path to the patched file
+        #
+        if self.PatchedBinFile == Output:
+          return Output
+
+        #
+        # If a different file from the same module has already been patched, then generate an error
+        #  
         if self.PatchedBinFile:
             EdkLogger.error("GenFds", GENFDS_ERROR,
                             'Only one binary file can be patched:\n'
                             '  a binary file has been patched: %s\n'
                             '  current file: %s' % (self.PatchedBinFile, EfiFile),
                             File=self.InfFileName)
-        Basename = os.path.basename(EfiFile)
-        Output = os.path.join(self.OutputPath, Basename)
+
+        #
+        # Copy unpatched file contents to output file location to perform patching
+        #  
         CopyLongFilePath(EfiFile, Output)
+
+        #
+        # Apply patches to patched output file
+        #  
         for Pcd, Value in self.PatchPcds:
             RetVal, RetStr = PatchBinaryFile(Output, int(Pcd.Offset, 0), Pcd.DatumType, Value, Pcd.MaxDatumSize)
             if RetVal:
                 EdkLogger.error("GenFds", GENFDS_ERROR, RetStr, File=self.InfFileName)
-        self.PatchedBinFile = os.path.normpath(EfiFile)
+
+        #
+        # Save the path of the patched output file
+        #  
+        self.PatchedBinFile = Output
+
+        #
+        # Return path to patched output file
+        #  
         return Output
+
     ## GenFfs() method
     #
     #   Generate FFS
@@ -365,7 +417,7 @@ class FfsInfStatement(FfsInfStatementClassObject):
         #
 
         self.__InfParse__(Dict)
-        SrcFile = os.path.join( GenFdsGlobalVariable.WorkSpaceDir , self.InfFileName);
+        SrcFile = mws.join( GenFdsGlobalVariable.WorkSpaceDir , self.InfFileName);
         DestFile = os.path.join( self.OutputPath, self.ModuleGuid + '.ffs')
         
         SrcFileDir = "."
@@ -511,37 +563,23 @@ class FfsInfStatement(FfsInfStatementClassObject):
     #
     def __GetPlatformArchList__(self):
 
-        InfFileKey = os.path.normpath(os.path.join(GenFdsGlobalVariable.WorkSpaceDir, self.InfFileName))
+        InfFileKey = os.path.normpath(mws.join(GenFdsGlobalVariable.WorkSpaceDir, self.InfFileName))
         DscArchList = []
-        PlatformDataBase = GenFdsGlobalVariable.WorkSpace.BuildObject[GenFdsGlobalVariable.ActivePlatform, 'IA32', GenFdsGlobalVariable.TargetName, GenFdsGlobalVariable.ToolChainTag]
-        if  PlatformDataBase != None:
-            if InfFileKey in PlatformDataBase.Modules:
-                DscArchList.append ('IA32')
-
-        PlatformDataBase = GenFdsGlobalVariable.WorkSpace.BuildObject[GenFdsGlobalVariable.ActivePlatform, 'X64', GenFdsGlobalVariable.TargetName, GenFdsGlobalVariable.ToolChainTag]
-        if  PlatformDataBase != None:
-            if InfFileKey in PlatformDataBase.Modules:
-                DscArchList.append ('X64')
-
-        PlatformDataBase = GenFdsGlobalVariable.WorkSpace.BuildObject[GenFdsGlobalVariable.ActivePlatform, 'IPF', GenFdsGlobalVariable.TargetName, GenFdsGlobalVariable.ToolChainTag]
-        if PlatformDataBase != None:
-            if InfFileKey in (PlatformDataBase.Modules):
-                DscArchList.append ('IPF')
-
-        PlatformDataBase = GenFdsGlobalVariable.WorkSpace.BuildObject[GenFdsGlobalVariable.ActivePlatform, 'ARM', GenFdsGlobalVariable.TargetName, GenFdsGlobalVariable.ToolChainTag]
-        if PlatformDataBase != None:
-            if InfFileKey in (PlatformDataBase.Modules):
-                DscArchList.append ('ARM')
-
-        PlatformDataBase = GenFdsGlobalVariable.WorkSpace.BuildObject[GenFdsGlobalVariable.ActivePlatform, 'EBC', GenFdsGlobalVariable.TargetName, GenFdsGlobalVariable.ToolChainTag]
-        if PlatformDataBase != None:
-            if InfFileKey in (PlatformDataBase.Modules):
-                DscArchList.append ('EBC')
-
-        PlatformDataBase = GenFdsGlobalVariable.WorkSpace.BuildObject[GenFdsGlobalVariable.ActivePlatform, 'AARCH64', GenFdsGlobalVariable.TargetName, GenFdsGlobalVariable.ToolChainTag]
-        if PlatformDataBase != None:
-            if InfFileKey in (PlatformDataBase.Modules):
-                DscArchList.append ('AARCH64')
+        for Arch in GenFdsGlobalVariable.ArchList :
+            PlatformDataBase = GenFdsGlobalVariable.WorkSpace.BuildObject[GenFdsGlobalVariable.ActivePlatform, Arch, GenFdsGlobalVariable.TargetName, GenFdsGlobalVariable.ToolChainTag]
+            if  PlatformDataBase != None:
+                if InfFileKey in PlatformDataBase.Modules:
+                    DscArchList.append (Arch)
+                else:
+                    #
+                    # BaseTools support build same module more than once, the module path with FILE_GUID overridden has
+                    # the file name FILE_GUIDmodule.inf, then PlatformDataBase.Modules use FILE_GUIDmodule.inf as key,
+                    # but the path (self.MetaFile.Path) is the real path
+                    #
+                    for key in PlatformDataBase.Modules.keys():
+                        if InfFileKey == str((PlatformDataBase.Modules[key]).MetaFile.Path):
+                            DscArchList.append (Arch)
+                            break
 
         return DscArchList
 
@@ -878,7 +916,7 @@ class FfsInfStatement(FfsInfStatementClassObject):
             
             if not HasGneratedFlag:
                 UniVfrOffsetFileSection = ""    
-                ModuleFileName = os.path.join(GenFdsGlobalVariable.WorkSpaceDir, self.InfFileName)
+                ModuleFileName = mws.join(GenFdsGlobalVariable.WorkSpaceDir, self.InfFileName)
                 InfData = GenFdsGlobalVariable.WorkSpace.BuildObject[PathClass(ModuleFileName), self.CurrentArch]
                 #
                 # Search the source list in InfData to find if there are .vfr file exist.
@@ -903,22 +941,23 @@ class FfsInfStatement(FfsInfStatementClassObject):
                     #
                     # Generate the Raw data of raw section
                     #
-                    os.path.join( self.OutputPath, self.BaseName + '.offset')
-                    UniVfrOffsetFileName    =  os.path.join( self.OutputPath, self.BaseName + '.offset')
-                    UniVfrOffsetFileSection =  os.path.join( self.OutputPath, self.BaseName + 'Offset' + '.raw')
-                    
-                    self.__GenUniVfrOffsetFile (VfrUniOffsetList, UniVfrOffsetFileName)
-                    
-                    UniVfrOffsetFileNameList = []
-                    UniVfrOffsetFileNameList.append(UniVfrOffsetFileName)
-                    """Call GenSection"""
-                    GenFdsGlobalVariable.GenerateSection(UniVfrOffsetFileSection,
-                                                         UniVfrOffsetFileNameList,
-                                                         "EFI_SECTION_RAW"
-                                                         )
-                    os.remove(UniVfrOffsetFileName)         
-                    SectList.append(UniVfrOffsetFileSection)
-                    HasGneratedFlag = True
+                    if VfrUniOffsetList:
+                        os.path.join( self.OutputPath, self.BaseName + '.offset')
+                        UniVfrOffsetFileName    =  os.path.join( self.OutputPath, self.BaseName + '.offset')
+                        UniVfrOffsetFileSection =  os.path.join( self.OutputPath, self.BaseName + 'Offset' + '.raw')
+
+                        self.__GenUniVfrOffsetFile (VfrUniOffsetList, UniVfrOffsetFileName)
+
+                        UniVfrOffsetFileNameList = []
+                        UniVfrOffsetFileNameList.append(UniVfrOffsetFileName)
+                        """Call GenSection"""
+                        GenFdsGlobalVariable.GenerateSection(UniVfrOffsetFileSection,
+                                                             UniVfrOffsetFileNameList,
+                                                             "EFI_SECTION_RAW"
+                                                             )
+                        os.remove(UniVfrOffsetFileName)
+                        SectList.append(UniVfrOffsetFileSection)
+                        HasGneratedFlag = True
                 
             for SecName in  SectList :
                 SectFiles.append(SecName)

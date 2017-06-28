@@ -1,7 +1,7 @@
 /** @file
   UEFI Memory pool management functions.
 
-Copyright (c) 2006 - 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2006 - 2016, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -14,6 +14,8 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
 #include "DxeMain.h"
 #include "Imem.h"
+
+STATIC EFI_LOCK mPoolMemoryLock = EFI_INITIALIZE_LOCK_VARIABLE (TPL_NOTIFY);
 
 #define POOL_FREE_SIGNATURE   SIGNATURE_32('p','f','r','0')
 typedef struct {
@@ -52,13 +54,13 @@ typedef struct {
 // as we would in a strict power-of-2 sequence
 //
 STATIC CONST UINT16 mPoolSizeTable[] = {
-  64, 128, 192, 320, 512, 832, 1344, 2176, 3520, 5696, 9216, 14912, 24128
+  128, 256, 384, 640, 1024, 1664, 2688, 4352, 7040, 11392, 18432, 29824
 };
 
 #define SIZE_TO_LIST(a)   (GetPoolIndexFromSize (a))
 #define LIST_TO_SIZE(a)   (mPoolSizeTable [a])
 
-#define MAX_POOL_LIST     (sizeof (mPoolSizeTable) / sizeof (mPoolSizeTable[0]))
+#define MAX_POOL_LIST     (ARRAY_SIZE (mPoolSizeTable))
 
 #define MAX_POOL_SIZE     (MAX_ADDRESS - POOL_OVERHEAD)
 
@@ -197,8 +199,9 @@ LookupPoolHead (
   @param  Buffer                 The address to return a pointer to the allocated
                                  pool
 
-  @retval EFI_INVALID_PARAMETER  PoolType not valid or Buffer is NULL. 
-                                 PoolType was EfiPersistentMemory.
+  @retval EFI_INVALID_PARAMETER  Buffer is NULL.
+                                 PoolType is in the range EfiMaxMemoryType..0x6FFFFFFF.
+                                 PoolType is EfiPersistentMemory.
   @retval EFI_OUT_OF_RESOURCES   Size exceeds max pool size or allocation failed.
   @retval EFI_SUCCESS            Pool successfully allocated.
 
@@ -238,13 +241,13 @@ CoreInternalAllocatePool (
   //
   // Acquire the memory lock and make the allocation
   //
-  Status = CoreAcquireLockOrFail (&gMemoryLock);
+  Status = CoreAcquireLockOrFail (&mPoolMemoryLock);
   if (EFI_ERROR (Status)) {
     return EFI_OUT_OF_RESOURCES;
   }
 
   *Buffer = CoreAllocatePoolI (PoolType, Size);
-  CoreReleaseMemoryLock ();
+  CoreReleaseLock (&mPoolMemoryLock);
   return (*Buffer != NULL) ? EFI_SUCCESS : EFI_OUT_OF_RESOURCES;
 }
 
@@ -256,7 +259,9 @@ CoreInternalAllocatePool (
   @param  Buffer                 The address to return a pointer to the allocated
                                  pool
 
-  @retval EFI_INVALID_PARAMETER  PoolType not valid or Buffer is NULL. 
+  @retval EFI_INVALID_PARAMETER  Buffer is NULL.
+                                 PoolType is in the range EfiMaxMemoryType..0x6FFFFFFF.
+                                 PoolType is EfiPersistentMemory.
   @retval EFI_OUT_OF_RESOURCES   Size exceeds max pool size or allocation failed.
   @retval EFI_SUCCESS            Pool successfully allocated.
 
@@ -273,9 +278,54 @@ CoreAllocatePool (
 
   Status = CoreInternalAllocatePool (PoolType, Size, Buffer);
   if (!EFI_ERROR (Status)) {
-    CoreUpdateProfile ((EFI_PHYSICAL_ADDRESS) (UINTN) RETURN_ADDRESS (0), MemoryProfileActionAllocatePool, PoolType, Size, *Buffer);
+    CoreUpdateProfile (
+      (EFI_PHYSICAL_ADDRESS) (UINTN) RETURN_ADDRESS (0),
+      MemoryProfileActionAllocatePool,
+      PoolType,
+      Size,
+      *Buffer,
+      NULL
+      );
+    InstallMemoryAttributesTableOnMemoryAllocation (PoolType);
   }
   return Status;
+}
+
+/**
+  Internal function.  Used by the pool functions to allocate pages
+  to back pool allocation requests.
+
+  @param  PoolType               The type of memory for the new pool pages
+  @param  NoPages                No of pages to allocate
+  @param  Granularity            Bits to align.
+
+  @return The allocated memory, or NULL
+
+**/
+STATIC
+VOID *
+CoreAllocatePoolPagesI (
+  IN EFI_MEMORY_TYPE    PoolType,
+  IN UINTN              NoPages,
+  IN UINTN              Granularity
+  )
+{
+  VOID        *Buffer;
+  EFI_STATUS  Status;
+
+  Status = CoreAcquireLockOrFail (&gMemoryLock);
+  if (EFI_ERROR (Status)) {
+    return NULL;
+  }
+
+  Buffer = CoreAllocatePoolPages (PoolType, NoPages, Granularity);
+  CoreReleaseMemoryLock ();
+
+  if (Buffer != NULL) {
+    ApplyMemoryProtectionPolicy (EfiConventionalMemory, PoolType,
+      (EFI_PHYSICAL_ADDRESS)(UINTN)Buffer, EFI_PAGES_TO_SIZE (NoPages));
+  }
+  return Buffer;
 }
 
 /**
@@ -306,16 +356,16 @@ CoreAllocatePoolI (
   UINTN       NoPages;
   UINTN       Granularity;
 
-  ASSERT_LOCKED (&gMemoryLock);
+  ASSERT_LOCKED (&mPoolMemoryLock);
 
   if  (PoolType == EfiACPIReclaimMemory   ||
        PoolType == EfiACPIMemoryNVS       ||
        PoolType == EfiRuntimeServicesCode ||
        PoolType == EfiRuntimeServicesData) {
 
-    Granularity = EFI_ACPI_RUNTIME_PAGE_ALLOCATION_ALIGNMENT;
+    Granularity = RUNTIME_PAGE_ALLOCATION_GRANULARITY;
   } else {
-    Granularity = DEFAULT_PAGE_ALLOCATION;
+    Granularity = DEFAULT_PAGE_ALLOCATION_GRANULARITY;
   }
 
   //
@@ -344,7 +394,7 @@ CoreAllocatePoolI (
   if (Index >= SIZE_TO_LIST (Granularity)) {
     NoPages = EFI_SIZE_TO_PAGES(Size) + EFI_SIZE_TO_PAGES (Granularity) - 1;
     NoPages &= ~(UINTN)(EFI_SIZE_TO_PAGES (Granularity) - 1);
-    Head = CoreAllocatePoolPages (PoolType, NoPages, Granularity);
+    Head = CoreAllocatePoolPagesI (PoolType, NoPages, Granularity);
     goto Done;
   }
 
@@ -372,7 +422,7 @@ CoreAllocatePoolI (
     //
     // Get another page
     //
-    NewPage = CoreAllocatePoolPages(PoolType, EFI_SIZE_TO_PAGES (Granularity), Granularity);
+    NewPage = CoreAllocatePoolPagesI (PoolType, EFI_SIZE_TO_PAGES (Granularity), Granularity);
     if (NewPage == NULL) {
       goto Done;
     }
@@ -456,6 +506,7 @@ Done:
   Frees pool.
 
   @param  Buffer                 The allocated pool entry to free
+  @param  PoolType               Pointer to pool type
 
   @retval EFI_INVALID_PARAMETER  Buffer is not a valid value.
   @retval EFI_SUCCESS            Pool successfully freed.
@@ -464,7 +515,8 @@ Done:
 EFI_STATUS
 EFIAPI
 CoreInternalFreePool (
-  IN VOID        *Buffer
+  IN VOID               *Buffer,
+  OUT EFI_MEMORY_TYPE   *PoolType OPTIONAL
   )
 {
   EFI_STATUS Status;
@@ -473,9 +525,9 @@ CoreInternalFreePool (
     return EFI_INVALID_PARAMETER;
   }
 
-  CoreAcquireMemoryLock ();
-  Status = CoreFreePoolI (Buffer);
-  CoreReleaseMemoryLock ();
+  CoreAcquireLock (&mPoolMemoryLock);
+  Status = CoreFreePoolI (Buffer, PoolType);
+  CoreReleaseLock (&mPoolMemoryLock);
   return Status;
 }
 
@@ -494,13 +546,46 @@ CoreFreePool (
   IN VOID  *Buffer
   )
 {
-  EFI_STATUS  Status;
+  EFI_STATUS        Status;
+  EFI_MEMORY_TYPE   PoolType;
 
-  Status = CoreInternalFreePool (Buffer);
+  Status = CoreInternalFreePool (Buffer, &PoolType);
   if (!EFI_ERROR (Status)) {
-    CoreUpdateProfile ((EFI_PHYSICAL_ADDRESS) (UINTN) RETURN_ADDRESS (0), MemoryProfileActionFreePool, (EFI_MEMORY_TYPE) 0, 0, Buffer);
+    CoreUpdateProfile (
+      (EFI_PHYSICAL_ADDRESS) (UINTN) RETURN_ADDRESS (0),
+      MemoryProfileActionFreePool,
+      PoolType,
+      0,
+      Buffer,
+      NULL
+      );
+    InstallMemoryAttributesTableOnMemoryAllocation (PoolType);
   }
   return Status;
+}
+
+/**
+  Internal function.  Frees pool pages allocated via CoreAllocatePoolPagesI().
+
+  @param  PoolType               The type of memory for the pool pages
+  @param  Memory                 The base address to free
+  @param  NoPages                The number of pages to free
+
+**/
+STATIC
+VOID
+CoreFreePoolPagesI (
+  IN EFI_MEMORY_TYPE        PoolType,
+  IN EFI_PHYSICAL_ADDRESS   Memory,
+  IN UINTN                  NoPages
+  )
+{
+  CoreAcquireMemoryLock ();
+  CoreFreePoolPages (Memory, NoPages);
+  CoreReleaseMemoryLock ();
+
+  ApplyMemoryProtectionPolicy (PoolType, EfiConventionalMemory,
+    (EFI_PHYSICAL_ADDRESS)(UINTN)Memory, EFI_PAGES_TO_SIZE (NoPages));
 }
 
 /**
@@ -508,6 +593,7 @@ CoreFreePool (
   Caller must have the memory lock held
 
   @param  Buffer                 The allocated pool entry to free
+  @param  PoolType               Pointer to pool type
 
   @retval EFI_INVALID_PARAMETER  Buffer not valid
   @retval EFI_SUCCESS            Buffer successfully freed.
@@ -515,7 +601,8 @@ CoreFreePool (
 **/
 EFI_STATUS
 CoreFreePoolI (
-  IN VOID       *Buffer
+  IN VOID               *Buffer,
+  OUT EFI_MEMORY_TYPE   *PoolType OPTIONAL
   )
 {
   POOL        *Pool;
@@ -549,7 +636,7 @@ CoreFreePoolI (
   //
   ASSERT (Tail->Signature == POOL_TAIL_SIGNATURE);
   ASSERT (Head->Size == Tail->Size);
-  ASSERT_LOCKED (&gMemoryLock);
+  ASSERT_LOCKED (&mPoolMemoryLock);
 
   if (Tail->Signature != POOL_TAIL_SIGNATURE) {
     return EFI_INVALID_PARAMETER;
@@ -575,9 +662,13 @@ CoreFreePoolI (
        Head->Type == EfiRuntimeServicesCode ||
        Head->Type == EfiRuntimeServicesData) {
 
-    Granularity = EFI_ACPI_RUNTIME_PAGE_ALLOCATION_ALIGNMENT;
+    Granularity = RUNTIME_PAGE_ALLOCATION_GRANULARITY;
   } else {
-    Granularity = DEFAULT_PAGE_ALLOCATION;
+    Granularity = DEFAULT_PAGE_ALLOCATION_GRANULARITY;
+  }
+
+  if (PoolType != NULL) {
+    *PoolType = Head->Type;
   }
 
   //
@@ -596,7 +687,7 @@ CoreFreePoolI (
     //
     NoPages = EFI_SIZE_TO_PAGES(Size) + EFI_SIZE_TO_PAGES (Granularity) - 1;
     NoPages &= ~(UINTN)(EFI_SIZE_TO_PAGES (Granularity) - 1);
-    CoreFreePoolPages ((EFI_PHYSICAL_ADDRESS) (UINTN) Head, NoPages);
+    CoreFreePoolPagesI (Pool->MemoryType, (EFI_PHYSICAL_ADDRESS) (UINTN) Head, NoPages);
 
   } else {
 
@@ -652,19 +743,20 @@ CoreFreePoolI (
         //
         // Free the page
         //
-        CoreFreePoolPages ((EFI_PHYSICAL_ADDRESS) (UINTN)NewPage, EFI_SIZE_TO_PAGES (Granularity));
+        CoreFreePoolPagesI (Pool->MemoryType, (EFI_PHYSICAL_ADDRESS) (UINTN)NewPage,
+          EFI_SIZE_TO_PAGES (Granularity));
       }
     }
   }
 
   //
-  // If this is an OS specific memory type, then check to see if the last
+  // If this is an OS/OEM specific memory type, then check to see if the last
   // portion of that memory type has been freed.  If it has, then free the
   // list entry for that memory type
   //
-  if ((INT32)Pool->MemoryType < 0 && Pool->Used == 0) {
+  if (((UINT32) Pool->MemoryType >= MEMORY_TYPE_OEM_RESERVED_MIN) && Pool->Used == 0) {
     RemoveEntryList (&Pool->Link);
-    CoreFreePoolI (Pool);
+    CoreFreePoolI (Pool, NULL);
   }
 
   return EFI_SUCCESS;

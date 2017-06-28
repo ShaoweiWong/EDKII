@@ -2,7 +2,7 @@
   Tools of clarify the content of the smbios table.
 
   (C) Copyright 2015 Hewlett-Packard Development Company, L.P.<BR>
-  Copyright (c) 2005 - 2012, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2005 - 2017, Intel Corporation. All rights reserved.<BR>
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
   which accompanies this distribution.  The full text of the license may be found at
@@ -242,7 +242,6 @@ Done:
   @retval EFI_BAD_BUFFER_SIZE   structure is out of the range of SMBIOS table.
 **/
 EFI_STATUS
-EFIAPI
 SMBiosView (
   IN  UINT8   QueryType,
   IN  UINT16  QueryHandle,
@@ -416,7 +415,6 @@ SMBiosView (
   @retval EFI_BAD_BUFFER_SIZE   structure is out of the range of SMBIOS table.
 **/
 EFI_STATUS
-EFIAPI
 SMBios64View (
   IN  UINT8   QueryType,
   IN  UINT16  QueryHandle,
@@ -582,7 +580,6 @@ SMBios64View (
   @retval EFI_SUCCESS           print is successful.
 **/
 EFI_STATUS
-EFIAPI
 InitSmbiosTableStatistics (
   VOID
   )
@@ -672,7 +669,6 @@ InitSmbiosTableStatistics (
   @retval EFI_SUCCESS           					Calculation was successful.
 **/
 EFI_STATUS
-EFIAPI
 CalculateSmbios64BitStructureCountAndLength (
   SMBIOS_TABLE_3_0_ENTRY_POINT    *Smbios64EntryPoint,
   UINTN                           *NumberOfSmbios64Structures,
@@ -704,7 +700,7 @@ CalculateSmbios64BitStructureCountAndLength (
     //
     // Length = Next structure head - this structure head
     //
-    (*Smbios64TableLength) += (UINTN) (Smbios.Raw - Raw);
+    (*Smbios64TableLength) += ((UINTN) Smbios.Raw - (UINTN) Raw);
     if ((*Smbios64TableLength) > Smbios64EntryPoint->TableMaximumSize) {
     	//
     	// The actual table length exceeds maximum table size,
@@ -722,7 +718,6 @@ CalculateSmbios64BitStructureCountAndLength (
   @retval EFI_SUCCESS           print is successful.
 **/
 EFI_STATUS
-EFIAPI
 InitSmbios64BitTableStatistics (
   VOID
   )
@@ -819,7 +814,6 @@ InitSmbios64BitTableStatistics (
   @retval EFI_SUCCESS           print is successful.
 **/
 EFI_STATUS
-EFIAPI
 DisplayStatisticsTable (
   IN   UINT8   Option
   )
@@ -900,7 +894,6 @@ DisplayStatisticsTable (
   @retval EFI_SUCCESS           print is successful.
 **/
 EFI_STATUS
-EFIAPI
 DisplaySmbios64BitStatisticsTable (
   IN   UINT8   Option
   )
@@ -981,7 +974,6 @@ DisplaySmbios64BitStatisticsTable (
   @return   A pointer to a string representing the ShowType (or 'undefined type' if not known).
 **/
 CHAR16 *
-EFIAPI
 GetShowTypeString (
   UINT8 ShowType
   )

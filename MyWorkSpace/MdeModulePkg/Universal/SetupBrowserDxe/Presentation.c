@@ -1,7 +1,8 @@
 /** @file
 Utility functions for UI presentation.
 
-Copyright (c) 2004 - 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2004 - 2017, Intel Corporation. All rights reserved.<BR>
+(C) Copyright 2015 Hewlett Packard Enterprise Development LP<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -67,22 +68,6 @@ EvaluateFormExpressions (
   }
 
   return EFI_SUCCESS;
-}
-
-/**
-  Add empty function for event process function.
-
-  @param Event    The Event need to be process
-  @param Context  The context of the event.
-
-**/
-VOID
-EFIAPI
-SetupBrowserEmptyFunction (
-  IN  EFI_EVENT    Event,
-  IN  VOID         *Context
-  )
-{
 }
 
 /**
@@ -357,7 +342,7 @@ InitializeDisplayStatement (
   //
   // Create the refresh event process function.
   //
-  if (!CompareGuid (&Statement->RefreshGuid, &gZeroGuid)) {
+  if (!IsZeroGuid (&Statement->RefreshGuid)) {
     CreateRefreshEventForStatement (Statement);
   }
 
@@ -372,7 +357,7 @@ InitializeDisplayStatement (
   // Create the refresh guid hook event.
   // If the statement in this form has refresh event or refresh interval, browser will create this event for display engine.
   //
-  if ((!CompareGuid (&Statement->RefreshGuid, &gZeroGuid)) || (Statement->RefreshInterval != 0)) {
+  if ((!IsZeroGuid (&Statement->RefreshGuid)) || (Statement->RefreshInterval != 0)) {
     gDisplayFormData.FormRefreshEvent = mValueChangedEvent;
   }
 
@@ -627,7 +612,7 @@ AddStatementToDisplayForm (
   //
   // Create the refresh event process function for Form.
   //
-  if (!CompareGuid (&gCurrentSelection->Form->RefreshGuid, &gZeroGuid)) {
+  if (!IsZeroGuid (&gCurrentSelection->Form->RefreshGuid)) {
     CreateRefreshEventForForm (gCurrentSelection->Form);
     if (gDisplayFormData.FormRefreshEvent == NULL) {
       gDisplayFormData.FormRefreshEvent = mValueChangedEvent;
@@ -717,7 +702,7 @@ InitializeDisplayFormData (
   Status = gBS->CreateEvent (
         EVT_NOTIFY_WAIT, 
         TPL_CALLBACK,
-        SetupBrowserEmptyFunction,
+        EfiEventEmptyFunction,
         NULL,
         &mValueChangedEvent
         );
@@ -1409,7 +1394,7 @@ ProcessGotoOpCode (
     CopyMem (&Selection->FormSetGuid,&Statement->HiiValue.Value.ref.FormSetGuid, sizeof (EFI_GUID));
     Selection->FormId = Statement->HiiValue.Value.ref.FormId;
     Selection->QuestionId = Statement->HiiValue.Value.ref.QuestionId;
-  } else if (!CompareGuid (&Statement->HiiValue.Value.ref.FormSetGuid, &gZeroGuid)) {
+  } else if (!IsZeroGuid (&Statement->HiiValue.Value.ref.FormSetGuid)) {
     if (Selection->Form->ModalForm) {
       return Status;
     }
@@ -1615,6 +1600,7 @@ ProcessUserInput (
         DeleteString(Statement->HiiValue.Value.string, gCurrentSelection->FormSet->HiiHandle);
         Statement->HiiValue.Value.string = UserInput->InputValue.Value.string;
         CopyMem (Statement->BufferValue, UserInput->InputValue.Buffer, (UINTN) UserInput->InputValue.BufferLen);
+        ZeroMem (UserInput->InputValue.Buffer, (UINTN) UserInput->InputValue.BufferLen);
         FreePool (UserInput->InputValue.Buffer);
         //
         // Two password match, send it to Configuration Driver
@@ -1936,8 +1922,8 @@ ReconnectController (
   @param Action                The action request.
   @param SkipSaveOrDiscard     Whether skip save or discard action.
 
-  @retval EFI_SUCCESS          The call back function excutes successfully.
-  @return Other value if the call back function failed to excute.  
+  @retval EFI_SUCCESS          The call back function executes successfully.
+  @return Other value if the call back function failed to execute.
 **/
 EFI_STATUS 
 ProcessCallBackFunction (
@@ -2043,6 +2029,7 @@ ProcessCallBackFunction (
 
         ASSERT (StrLen (NewString) * sizeof (CHAR16) <= Statement->StorageWidth);
         if (StrLen (NewString) * sizeof (CHAR16) <= Statement->StorageWidth) {
+          ZeroMem (Statement->BufferValue, Statement->StorageWidth);
           CopyMem (Statement->BufferValue, NewString, StrSize (NewString));
         } else {
           CopyMem (Statement->BufferValue, NewString, Statement->StorageWidth);
@@ -2245,8 +2232,8 @@ ProcessCallBackFunction (
   @param Statement             The Question which need to call.
   @param FormSet               The formset this question belong to.
 
-  @retval EFI_SUCCESS          The call back function excutes successfully.
-  @return Other value if the call back function failed to excute.  
+  @retval EFI_SUCCESS          The call back function executes successfully.
+  @return Other value if the call back function failed to execute.
 **/
 EFI_STATUS 
 ProcessRetrieveForQuestion (
@@ -2292,6 +2279,7 @@ ProcessRetrieveForQuestion (
 
     ASSERT (StrLen (NewString) * sizeof (CHAR16) <= Statement->StorageWidth);
     if (StrLen (NewString) * sizeof (CHAR16) <= Statement->StorageWidth) {
+      ZeroMem (Statement->BufferValue, Statement->StorageWidth);
       CopyMem (Statement->BufferValue, NewString, StrSize (NewString));
     } else {
       CopyMem (Statement->BufferValue, NewString, Statement->StorageWidth);
@@ -2359,6 +2347,12 @@ SetupBrowser (
   mCurFakeQestId = 0;
 
   do {
+
+    //
+    // Reset Status to prevent the next break from returning incorrect error status.
+    //
+    Status = EFI_SUCCESS;
+
     //
     // IFR is updated, force to reparse the IFR binary
     // This check is shared by EFI_BROWSER_ACTION_FORM_CLOSE and 
@@ -2505,10 +2499,13 @@ SetupBrowser (
           //
           if (EFI_ERROR (Status)) {
             //
-            // Cross reference will not be taken
+            // Cross reference will not be taken, restore all essential field
             //
-            Selection->FormId = Selection->Form->FormId;
+            Selection->Handle = mCurrentHiiHandle;
+            CopyMem (&Selection->FormSetGuid, &mCurrentFormSetGuid, sizeof (EFI_GUID));
+            Selection->FormId = mCurrentFormId;
             Selection->QuestionId = 0;
+            Selection->Action = UI_ACTION_REFRESH_FORM;
           }
         }
 

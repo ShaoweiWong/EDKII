@@ -5,7 +5,7 @@
   from a software point of view. The path must persist from boot to boot, so 
   it can not contain things like PCI bus numbers that change from boot to boot.
 
-Copyright (c) 2006 - 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2006 - 2017, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials are licensed and made available under 
 the terms and conditions of the BSD License that accompanies this distribution.  
 The full text of the license may be found at
@@ -509,7 +509,7 @@ typedef struct {
   UINT16                          HBAPortNumber;
   ///
   /// The Port multiplier port number that facilitates the connection
-  /// to the device. Bit 15 should be set if the device is directly
+  /// to the device. Must be set to 0xFFFF if the device is directly
   /// connected to the HBA.
   ///
   UINT16                          PortMultiplierPortNumber;
@@ -855,6 +855,15 @@ typedef struct {
 } SD_DEVICE_PATH;
 
 ///
+/// EMMC (Embedded MMC) Device Path SubType.
+///
+#define MSG_EMMC_DP                 0x1D
+typedef struct {
+  EFI_DEVICE_PATH_PROTOCOL        Header;
+  UINT8                           SlotNumber;
+} EMMC_DEVICE_PATH;
+
+///
 /// iSCSI Device Path SubType
 ///
 #define MSG_ISCSI_DP              0x13
@@ -928,6 +937,15 @@ typedef struct {
   ///
   UINT8                           SSId[32];
 } WIFI_DEVICE_PATH;
+
+///
+/// Bluetooth LE Device Path SubType.
+///
+#define MSG_BLUETOOTH_LE_DP       0x1E
+typedef struct {
+  EFI_DEVICE_PATH_PROTOCOL        Header;
+  BLUETOOTH_LE_ADDRESS            Address;
+} BLUETOOTH_LE_DEVICE_PATH;
 
 //
 // Media Device Path
@@ -1239,6 +1257,7 @@ typedef union {
   WIFI_DEVICE_PATH                           WiFi;
   UFS_DEVICE_PATH                            Ufs;
   SD_DEVICE_PATH                             Sd;
+  EMMC_DEVICE_PATH                           Emmc;
   HARDDRIVE_DEVICE_PATH                      HardDrive;
   CDROM_DEVICE_PATH                          CD;
 
@@ -1295,6 +1314,7 @@ typedef union {
   WIFI_DEVICE_PATH                           *WiFi;
   UFS_DEVICE_PATH                            *Ufs;
   SD_DEVICE_PATH                             *Sd;
+  EMMC_DEVICE_PATH                           *Emmc;
   HARDDRIVE_DEVICE_PATH                      *HardDrive;
   CDROM_DEVICE_PATH                          *CD;
 

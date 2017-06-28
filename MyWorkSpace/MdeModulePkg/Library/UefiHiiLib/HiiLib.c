@@ -1,7 +1,7 @@
 /** @file
   HII Library implementation that uses DXE protocols and services.
 
-  Copyright (c) 2006 - 2015, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2006 - 2017, Intel Corporation. All rights reserved.<BR>
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
   which accompanies this distribution.  The full text of the license may be found at
@@ -378,6 +378,127 @@ HiiGetHiiHandles (
 }
 
 /**
+  This function allows a caller to extract the form set opcode form the Hii Handle.
+  The returned buffer is allocated using AllocatePool().The caller is responsible 
+  for freeing the allocated buffer using FreePool().
+
+  @param Handle            The HII handle.
+  @param Buffer            On return, points to a pointer which point to the buffer that contain the formset opcode.
+  @param BufferSize        On return, points to the length of the buffer.
+
+  @retval EFI_OUT_OF_RESOURCES   No enough memory resource is allocated.
+  @retval EFI_NOT_FOUND          Can't find the package data for the input Handle.
+  @retval EFI_INVALID_PARAMETER  The input parameters are not correct.
+  @retval EFI_SUCCESS            Get the formset opcode from the hii handle successfully.
+
+**/
+EFI_STATUS
+EFIAPI
+HiiGetFormSetFromHiiHandle(
+  IN  EFI_HII_HANDLE     Handle,
+  OUT EFI_IFR_FORM_SET   **Buffer,
+  OUT UINTN              *BufferSize
+  )
+{
+  EFI_STATUS                   Status;
+  UINTN                        PackageListSize;
+  UINTN                        TempSize;
+  EFI_HII_PACKAGE_LIST_HEADER  *HiiPackageList;
+  UINT8                        *Package;
+  UINT8                        *OpCodeData;
+  UINT8                        *FormSetBuffer;
+  UINT8                        *TempBuffer;
+  UINT32                       Offset;
+  UINT32                       Offset2;
+  UINT32                       PackageListLength;
+  EFI_HII_PACKAGE_HEADER       PackageHeader;
+
+  TempSize = 0;
+  FormSetBuffer = NULL;
+  TempBuffer    = NULL;
+
+  //
+  // Get HII PackageList
+  //
+  PackageListSize = 0;
+  HiiPackageList = NULL;
+  Status = gHiiDatabase->ExportPackageLists (gHiiDatabase, Handle, &PackageListSize, HiiPackageList);
+  if (EFI_ERROR (Status) && (Status != EFI_BUFFER_TOO_SMALL)) {
+    return Status;
+  }
+
+  HiiPackageList = AllocatePool (PackageListSize);
+  if (HiiPackageList == NULL) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+
+  Status = gHiiDatabase->ExportPackageLists (gHiiDatabase, Handle, &PackageListSize, HiiPackageList);
+  ASSERT_EFI_ERROR (Status);
+
+  //
+  // Get Form package from this HII package List
+  //
+  Status = EFI_NOT_FOUND;
+  Offset = sizeof (EFI_HII_PACKAGE_LIST_HEADER);
+  PackageListLength = ReadUnaligned32 (&HiiPackageList->PackageLength);
+
+  while (Offset < PackageListLength) {
+    Package = ((UINT8 *) HiiPackageList) + Offset;
+    CopyMem (&PackageHeader, Package, sizeof (EFI_HII_PACKAGE_HEADER));
+    Offset += PackageHeader.Length;
+
+    if (PackageHeader.Type != EFI_HII_PACKAGE_FORMS) {
+      continue;
+    }
+
+    //
+    // Search FormSet Opcode in this Form Package
+    //
+    Offset2 = sizeof (EFI_HII_PACKAGE_HEADER);
+    while (Offset2 < PackageHeader.Length) {
+      OpCodeData = Package + Offset2;
+      Offset2 += ((EFI_IFR_OP_HEADER *) OpCodeData)->Length;
+
+      if (((EFI_IFR_OP_HEADER *) OpCodeData)->OpCode != EFI_IFR_FORM_SET_OP) {
+        continue;
+      }
+
+      if (FormSetBuffer != NULL){
+        TempBuffer = AllocateCopyPool (TempSize + ((EFI_IFR_OP_HEADER *) OpCodeData)->Length, FormSetBuffer);
+        FreePool(FormSetBuffer);
+        FormSetBuffer = NULL;
+        if (TempBuffer == NULL) {
+          Status = EFI_OUT_OF_RESOURCES;
+          goto Done;
+        }
+        CopyMem (TempBuffer + TempSize,  OpCodeData, ((EFI_IFR_OP_HEADER *) OpCodeData)->Length);
+      } else {
+        TempBuffer = AllocateCopyPool (TempSize + ((EFI_IFR_OP_HEADER *) OpCodeData)->Length, OpCodeData);
+        if (TempBuffer == NULL) {
+          Status = EFI_OUT_OF_RESOURCES;
+          goto Done;
+        }
+      }
+      TempSize += ((EFI_IFR_OP_HEADER *) OpCodeData)->Length;
+      FormSetBuffer = TempBuffer;
+
+      Status = EFI_SUCCESS;
+      //
+      //One form package has one formset, exit current form package to search other form package in the packagelist.
+      //
+      break;
+    }
+  }
+Done:
+  FreePool (HiiPackageList);
+
+  *BufferSize = TempSize;
+  *Buffer = (EFI_IFR_FORM_SET *)FormSetBuffer;
+
+  return Status;
+}
+
+/**
   Converts all hex dtring characters in range ['A'..'F'] to ['a'..'f'] for 
   hex digits that appear between a '=' and a '&' in a config string.
 
@@ -575,17 +696,17 @@ InternalHiiBrowserCallback (
 
   @param[in]  Guid          Pointer to an EFI_GUID that is the routing information
                             GUID.  Each of the 16 bytes in Guid is converted to 
-                            a 2 Unicode character hexidecimal string.  This is 
+                            a 2 Unicode character hexadecimal string.  This is
                             an optional parameter that may be NULL.
   @param[in]  Name          Pointer to a Null-terminated Unicode string that is 
                             the routing information NAME.  This is an optional 
                             parameter that may be NULL.  Each 16-bit Unicode 
                             character in Name is converted to a 4 character Unicode 
-                            hexidecimal string.                        
+                            hexadecimal string.
   @param[in]  DriverHandle  The driver handle which supports a Device Path Protocol
                             that is the routing information PATH.  Each byte of
                             the Device Path associated with DriverHandle is converted
-                            to a 2 Unicode character hexidecimal string.
+                            to a 2 Unicode character hexadecimal string.
 
   @retval NULL   DriverHandle does not support the Device Path Protocol.
   @retval Other  A pointer to the Null-terminate Unicode <ConfigHdr> string
@@ -655,7 +776,14 @@ HiiConstructConfigHdr (
     // Append Guid converted to <HexCh>32
     //
     for (Index = 0, Buffer = (UINT8 *)Guid; Index < sizeof (EFI_GUID); Index++) {
-      String += UnicodeValueToString (String, PREFIX_ZERO | RADIX_HEX, *(Buffer++), 2);
+      UnicodeValueToStringS (
+        String,
+        MaxLen * sizeof (CHAR16) - ((UINTN)String - (UINTN)ReturnString),
+        PREFIX_ZERO | RADIX_HEX,
+        *(Buffer++),
+        2
+        );
+      String += StrnLenS (String, MaxLen - ((UINTN)String - (UINTN)ReturnString) / sizeof (CHAR16));
     }
   }
   
@@ -670,7 +798,14 @@ HiiConstructConfigHdr (
     // Append Name converted to <Char>NameLength
     //
     for (; *Name != L'\0'; Name++) {
-      String += UnicodeValueToString (String, PREFIX_ZERO | RADIX_HEX, *Name, 4);
+      UnicodeValueToStringS (
+        String,
+        sizeof (CHAR16) * MaxLen - ((UINTN)String - (UINTN)ReturnString),
+        PREFIX_ZERO | RADIX_HEX,
+        *Name,
+        4
+        );
+      String += StrnLenS (String, MaxLen - ((UINTN)String - (UINTN)ReturnString) / sizeof (CHAR16));
     }
   }
 
@@ -684,7 +819,14 @@ HiiConstructConfigHdr (
   // Append the device path associated with DriverHandle converted to <HexChar>DevicePathSize
   //
   for (Index = 0, Buffer = (UINT8 *)DevicePath; Index < DevicePathSize; Index++) {
-    String += UnicodeValueToString (String, PREFIX_ZERO | RADIX_HEX, *(Buffer++), 2);
+    UnicodeValueToStringS (
+      String,
+      sizeof (CHAR16) * MaxLen - ((UINTN)String - (UINTN)ReturnString),
+      PREFIX_ZERO | RADIX_HEX,
+      *(Buffer++),
+      2
+      );
+    String += StrnLenS (String, MaxLen - ((UINTN)String - (UINTN)ReturnString) / sizeof (CHAR16));
   }
 
   //
@@ -1009,7 +1151,7 @@ ValidateQuestionFromVfr (
   UINT64                       VarValue;
   EFI_IFR_TYPE_VALUE           TmpValue;
   EFI_STATUS                   Status;
-  EFI_HII_PACKAGE_HEADER       PacakgeHeader;
+  EFI_HII_PACKAGE_HEADER       PackageHeader;
   UINT32                       PackageOffset;
   UINT8                        *PackageData;
   UINTN                        IfrOffset;
@@ -1046,15 +1188,15 @@ ValidateQuestionFromVfr (
   //
   PackageOffset = sizeof (EFI_HII_PACKAGE_LIST_HEADER);
   while (PackageOffset < PackageListLength) {
-    CopyMem (&PacakgeHeader, (UINT8 *) HiiPackageList + PackageOffset, sizeof (PacakgeHeader));
+    CopyMem (&PackageHeader, (UINT8 *) HiiPackageList + PackageOffset, sizeof (PackageHeader));
 
     //
     // Parse IFR opcode from the form package.
     //
-    if (PacakgeHeader.Type == EFI_HII_PACKAGE_FORMS) {
-      IfrOffset   = sizeof (PacakgeHeader);
+    if (PackageHeader.Type == EFI_HII_PACKAGE_FORMS) {
+      IfrOffset   = sizeof (PackageHeader);
       PackageData = (UINT8 *) HiiPackageList + PackageOffset;
-      while (IfrOffset < PacakgeHeader.Length) {
+      while (IfrOffset < PackageHeader.Length) {
         IfrOpHdr = (EFI_IFR_OP_HEADER *) (PackageData + IfrOffset);
         //
         // Validate current setting to the value built in IFR opcode
@@ -1589,7 +1731,7 @@ ValidateQuestionFromVfr (
     //
     // Go to next package.
     //
-    PackageOffset += PacakgeHeader.Length;
+    PackageOffset += PackageHeader.Length;
   }
 
   return EFI_SUCCESS;
@@ -1732,7 +1874,7 @@ GetBlockDataInfo (
     //
     // Check whether VarBuffer is enough
     //
-    if ((UINTN) (Offset + Width) > MaxBufferSize) {
+    if ((UINT32)Offset + Width > MaxBufferSize) {
       DataBuffer = ReallocatePool (
                     MaxBufferSize,
                     Offset + Width + HII_LIB_DEFAULT_VARSTORE_SIZE,
@@ -1986,7 +2128,7 @@ GetElementsFromRequest (
   @param DefaultId  Specifies the type of defaults to retrieve only for setting default action.
   @param ActionType Action supports setting defaults and validate current setting.
   
-  @retval TURE    Action runs successfully.
+  @retval TRUE    Action runs successfully.
   @retval FALSE   Action is not valid or Action can't be executed successfully..
 **/
 BOOLEAN
@@ -2059,8 +2201,9 @@ InternalHiiIfrValueAction (
   }
   
   StringPtr = ConfigAltResp;
-  
-  while (StringPtr != L'\0') {
+  ASSERT (StringPtr != NULL);
+
+  while (*StringPtr != L'\0') {
     //
     // 1. Find <ConfigHdr> GUID=...&NAME=...&PATH=...
     //
@@ -2380,7 +2523,7 @@ HiiValidateSettings (
                     entirety of the current HII database will be reset.
   @param DefaultId  Specifies the type of defaults to retrieve.
   
-  @retval TURE    The default value is set successfully.
+  @retval TRUE    The default value is set successfully.
   @retval FALSE   The default value can't be found and set.
 **/
 BOOLEAN
@@ -4085,7 +4228,7 @@ HiiUpdateForm (
   UINTN                        BufferSize;
   UINT8                        *UpdateBufferPos;
   EFI_HII_PACKAGE_HEADER       *Package;
-  EFI_HII_PACKAGE_HEADER       *TempPacakge;
+  EFI_HII_PACKAGE_HEADER       *TempPackage;
   EFI_HII_PACKAGE_HEADER       PackageHeader;
   BOOLEAN                      Updated;
   HII_LIB_OPCODE_BUFFER        *OpCodeBufferStart;
@@ -4097,7 +4240,7 @@ HiiUpdateForm (
   ASSERT (HiiHandle != NULL);
   ASSERT (StartOpCodeHandle != NULL);
   UpdatePackageList = NULL;
-  TempPacakge       = NULL;
+  TempPackage       = NULL;
   HiiPackageList    = NULL;
   
   //
@@ -4143,8 +4286,8 @@ HiiUpdateForm (
   //
   // Allocate temp buffer to store the temp updated package buffer
   //
-  TempPacakge = AllocateZeroPool (BufferSize);
-  if (TempPacakge == NULL) {
+  TempPackage = AllocateZeroPool (BufferSize);
+  if (TempPackage == NULL) {
     Status = EFI_OUT_OF_RESOURCES;
     goto Finish;
   }
@@ -4172,7 +4315,7 @@ HiiUpdateForm (
       //
       // Check this package is the matched package.
       //
-      Status = InternalHiiUpdateFormPackageData (FormSetGuid, FormId, Package, OpCodeBufferStart, OpCodeBufferEnd, TempPacakge);
+      Status = InternalHiiUpdateFormPackageData (FormSetGuid, FormId, Package, OpCodeBufferStart, OpCodeBufferEnd, TempPackage);
       //
       // The matched package is found. Its package buffer will be updated by the input new data.
       //
@@ -4184,7 +4327,7 @@ HiiUpdateForm (
         //
         // Add updated package buffer
         //
-        Package = TempPacakge;
+        Package = TempPackage;
       }
     }
 
@@ -4223,8 +4366,8 @@ Finish:
     FreePool (UpdatePackageList);
   }
   
-  if (TempPacakge != NULL) {
-    FreePool (TempPacakge);
+  if (TempPackage != NULL) {
+    FreePool (TempPackage);
   }
 
   return Status; 

@@ -1,7 +1,7 @@
 /** @file
   Implement TPM2 Integrity related command.
 
-Copyright (c) 2013 - 2014, Intel Corporation. All rights reserved. <BR>
+Copyright (c) 2013 - 2016, Intel Corporation. All rights reserved. <BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -490,10 +490,14 @@ Tpm2PcrAllocate (
              &ResultBufSize,
              ResultBuf
              );
+  if (EFI_ERROR(Status)) {
+    goto Done;
+  }
 
   if (ResultBufSize > sizeof(Res)) {
     DEBUG ((EFI_D_ERROR, "Tpm2PcrAllocate: Failed ExecuteCommand: Buffer Too Small\r\n"));
-    return EFI_BUFFER_TOO_SMALL;
+    Status = EFI_BUFFER_TOO_SMALL;
+    goto Done;
   }
 
   //
@@ -502,7 +506,8 @@ Tpm2PcrAllocate (
   RespSize = SwapBytes32(Res.Header.paramSize);
   if (RespSize > sizeof(Res)) {
     DEBUG ((EFI_D_ERROR, "Tpm2PcrAllocate: Response size too large! %d\r\n", RespSize));
-    return EFI_BUFFER_TOO_SMALL;
+    Status = EFI_BUFFER_TOO_SMALL;
+    goto Done;
   }
 
   //
@@ -510,7 +515,8 @@ Tpm2PcrAllocate (
   //
   if (SwapBytes32(Res.Header.responseCode) != TPM_RC_SUCCESS) {
     DEBUG((EFI_D_ERROR,"Tpm2PcrAllocate: Response Code error! 0x%08x\r\n", SwapBytes32(Res.Header.responseCode)));
-    return EFI_DEVICE_ERROR;
+    Status = EFI_DEVICE_ERROR;
+    goto Done;
   }
 
   //
@@ -521,5 +527,145 @@ Tpm2PcrAllocate (
   *SizeNeeded = SwapBytes32(Res.SizeNeeded);
   *SizeAvailable = SwapBytes32(Res.SizeAvailable);
 
-  return EFI_SUCCESS;
+Done:
+  //
+  // Clear AuthSession Content
+  //
+  ZeroMem (&Cmd, sizeof(Cmd));
+  ZeroMem (&Res, sizeof(Res));
+  return Status;
+}
+
+/**
+  Alloc PCR data.
+
+  @param[in]  PlatformAuth      platform auth value. NULL means no platform auth change.
+  @param[in]  SupportedPCRBanks Supported PCR banks
+  @param[in]  PCRBanks          PCR banks
+  
+  @retval EFI_SUCCESS Operation completed successfully.
+**/
+EFI_STATUS
+EFIAPI
+Tpm2PcrAllocateBanks (
+  IN TPM2B_AUTH                *PlatformAuth,  OPTIONAL
+  IN UINT32                    SupportedPCRBanks,
+  IN UINT32                    PCRBanks
+  )
+{
+  EFI_STATUS                Status;
+  TPMS_AUTH_COMMAND         *AuthSession;
+  TPMS_AUTH_COMMAND         LocalAuthSession;
+  TPML_PCR_SELECTION        PcrAllocation;
+  TPMI_YES_NO               AllocationSuccess;
+  UINT32                    MaxPCR;
+  UINT32                    SizeNeeded;
+  UINT32                    SizeAvailable;
+
+  if (PlatformAuth == NULL) {
+    AuthSession = NULL;
+  } else {
+    AuthSession = &LocalAuthSession;
+    ZeroMem (&LocalAuthSession, sizeof(LocalAuthSession));
+    LocalAuthSession.sessionHandle = TPM_RS_PW;
+    LocalAuthSession.hmac.size = PlatformAuth->size;
+    CopyMem (LocalAuthSession.hmac.buffer, PlatformAuth->buffer, PlatformAuth->size);
+  }
+
+  //
+  // Fill input
+  //
+  ZeroMem (&PcrAllocation, sizeof(PcrAllocation));
+  if ((HASH_ALG_SHA1 & SupportedPCRBanks) != 0) {
+    PcrAllocation.pcrSelections[PcrAllocation.count].hash = TPM_ALG_SHA1;
+    PcrAllocation.pcrSelections[PcrAllocation.count].sizeofSelect = PCR_SELECT_MAX;
+    if ((HASH_ALG_SHA1 & PCRBanks) != 0) {
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[0] = 0xFF;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[1] = 0xFF;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[2] = 0xFF;
+    } else {
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[0] = 0x00;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[1] = 0x00;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[2] = 0x00;
+    }
+    PcrAllocation.count++;
+  }
+  if ((HASH_ALG_SHA256 & SupportedPCRBanks) != 0) {
+    PcrAllocation.pcrSelections[PcrAllocation.count].hash = TPM_ALG_SHA256;
+    PcrAllocation.pcrSelections[PcrAllocation.count].sizeofSelect = PCR_SELECT_MAX;
+    if ((HASH_ALG_SHA256 & PCRBanks) != 0) {
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[0] = 0xFF;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[1] = 0xFF;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[2] = 0xFF;
+    } else {
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[0] = 0x00;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[1] = 0x00;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[2] = 0x00;
+    }
+    PcrAllocation.count++;
+  }
+  if ((HASH_ALG_SHA384 & SupportedPCRBanks) != 0) {
+    PcrAllocation.pcrSelections[PcrAllocation.count].hash = TPM_ALG_SHA384;
+    PcrAllocation.pcrSelections[PcrAllocation.count].sizeofSelect = PCR_SELECT_MAX;
+    if ((HASH_ALG_SHA384 & PCRBanks) != 0) {
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[0] = 0xFF;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[1] = 0xFF;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[2] = 0xFF;
+    } else {
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[0] = 0x00;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[1] = 0x00;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[2] = 0x00;
+    }
+    PcrAllocation.count++;
+  }
+  if ((HASH_ALG_SHA512 & SupportedPCRBanks) != 0) {
+    PcrAllocation.pcrSelections[PcrAllocation.count].hash = TPM_ALG_SHA512;
+    PcrAllocation.pcrSelections[PcrAllocation.count].sizeofSelect = PCR_SELECT_MAX;
+    if ((HASH_ALG_SHA512 & PCRBanks) != 0) {
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[0] = 0xFF;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[1] = 0xFF;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[2] = 0xFF;
+    } else {
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[0] = 0x00;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[1] = 0x00;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[2] = 0x00;
+    }
+    PcrAllocation.count++;
+  }
+  if ((HASH_ALG_SM3_256 & SupportedPCRBanks) != 0) {
+    PcrAllocation.pcrSelections[PcrAllocation.count].hash = TPM_ALG_SM3_256;
+    PcrAllocation.pcrSelections[PcrAllocation.count].sizeofSelect = PCR_SELECT_MAX;
+    if ((HASH_ALG_SM3_256 & PCRBanks) != 0) {
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[0] = 0xFF;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[1] = 0xFF;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[2] = 0xFF;
+    } else {
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[0] = 0x00;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[1] = 0x00;
+      PcrAllocation.pcrSelections[PcrAllocation.count].pcrSelect[2] = 0x00;
+    }
+    PcrAllocation.count++;
+  }
+  Status = Tpm2PcrAllocate (
+             TPM_RH_PLATFORM,
+             AuthSession,
+             &PcrAllocation,
+             &AllocationSuccess,
+             &MaxPCR,
+             &SizeNeeded,
+             &SizeAvailable
+             );
+  DEBUG ((EFI_D_INFO, "Tpm2PcrAllocateBanks call Tpm2PcrAllocate - %r\n", Status));
+  if (EFI_ERROR (Status)) {
+    goto Done;
+  }
+
+  DEBUG ((EFI_D_INFO, "AllocationSuccess - %02x\n", AllocationSuccess));
+  DEBUG ((EFI_D_INFO, "MaxPCR            - %08x\n", MaxPCR));
+  DEBUG ((EFI_D_INFO, "SizeNeeded        - %08x\n", SizeNeeded));
+  DEBUG ((EFI_D_INFO, "SizeAvailable     - %08x\n", SizeAvailable));
+
+Done:
+  ZeroMem(&LocalAuthSession.hmac, sizeof(LocalAuthSession.hmac));
+  return Status;
 }

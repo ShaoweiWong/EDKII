@@ -2,7 +2,7 @@
 
   XHCI transfer scheduling routines.
 
-Copyright (c) 2011 - 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2011 - 2016, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -1009,7 +1009,11 @@ IsAsyncIntTrb (
         return TRUE;
       }
       CheckedTrb++;
-      if ((UINTN)CheckedTrb >= ((UINTN) CheckedUrb->Ring->RingSeg0 + sizeof (TRB_TEMPLATE) * CheckedUrb->Ring->TrbNumber)) {
+      //
+      // If the checked TRB is the link TRB at the end of the transfer ring,
+      // recircle it to the head of the ring.
+      //
+      if (CheckedTrb->Type == TRB_TYPE_LINK) {
         CheckedTrb = (TRB_TEMPLATE*) CheckedUrb->Ring->RingSeg0;
       }
     }
@@ -1163,7 +1167,7 @@ XhcCheckUrbResult (
       case TRB_COMPLETION_SHORT_PACKET:
       case TRB_COMPLETION_SUCCESS:
         if (EvtTrb->Completecode == TRB_COMPLETION_SHORT_PACKET) {
-          DEBUG ((EFI_D_ERROR, "XhcCheckUrbResult: short packet happens!\n"));
+          DEBUG ((EFI_D_VERBOSE, "XhcCheckUrbResult: short packet happens!\n"));
         }
 
         TRBType = (UINT8) (TRBPtr->Type);
@@ -1315,6 +1319,7 @@ XhciDelAsyncIntTransfer (
   LIST_ENTRY              *Next;
   URB                     *Urb;
   EFI_USB_DATA_DIRECTION  Direction;
+  EFI_STATUS              Status;
 
   Direction = ((EpNum & 0x80) != 0) ? EfiUsbDataIn : EfiUsbDataOut;
   EpNum    &= 0x0F;
@@ -1326,6 +1331,15 @@ XhciDelAsyncIntTransfer (
     if ((Urb->Ep.BusAddr == BusAddr) &&
         (Urb->Ep.EpAddr == EpNum) &&
         (Urb->Ep.Direction == Direction)) {
+      //
+      // Device doesn't finish the IntTransfer until real data comes
+      // So the TRB should be removed as well.
+      //
+      Status = XhcDequeueTrbFromEndpoint (Xhc, Urb);
+      if (EFI_ERROR (Status)) {
+        DEBUG ((EFI_D_ERROR, "XhciDelAsyncIntTransfer: XhcDequeueTrbFromEndpoint failed\n"));
+      }
+
       RemoveEntryList (&Urb->UrbList);
       FreePool (Urb->Data);
       XhcFreeUrb (Xhc, Urb);
@@ -1350,9 +1364,20 @@ XhciDelAllAsyncIntTransfers (
   LIST_ENTRY              *Entry;
   LIST_ENTRY              *Next;
   URB                     *Urb;
+  EFI_STATUS              Status;
 
   EFI_LIST_FOR_EACH_SAFE (Entry, Next, &Xhc->AsyncIntTransfers) {
     Urb = EFI_LIST_CONTAINER (Entry, URB, UrbList);
+
+    //
+    // Device doesn't finish the IntTransfer until real data comes
+    // So the TRB should be removed as well.
+    //
+    Status = XhcDequeueTrbFromEndpoint (Xhc, Urb);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((EFI_D_ERROR, "XhciDelAllAsyncIntTransfers: XhcDequeueTrbFromEndpoint failed\n"));
+    }
+
     RemoveEntryList (&Urb->UrbList);
     FreePool (Urb->Data);
     XhcFreeUrb (Xhc, Urb);
@@ -2111,6 +2136,10 @@ XhcInitializeDeviceSlot (
   // 8) Issue an Address Device Command for the Device Slot, where the command points to the Input
   //    Context data structure described above.
   //
+  // Delay 10ms to meet TRSTRCY delay requirement in usb 2.0 spec chapter 7.1.7.5 before sending SetAddress() request
+  // to device.
+  //
+  gBS->Stall (XHC_RESET_RECOVERY_DELAY);
   ZeroMem (&CmdTrbAddr, sizeof (CmdTrbAddr));
   PhyAddr = UsbHcGetPciAddrForHostAddr (Xhc->MemPool, Xhc->UsbDevContext[SlotId].InputContext, sizeof (INPUT_CONTEXT));
   CmdTrbAddr.PtrLo    = XHC_LOW_32BIT (PhyAddr);
@@ -2317,6 +2346,10 @@ XhcInitializeDeviceSlot64 (
   // 8) Issue an Address Device Command for the Device Slot, where the command points to the Input
   //    Context data structure described above.
   //
+  // Delay 10ms to meet TRSTRCY delay requirement in usb 2.0 spec chapter 7.1.7.5 before sending SetAddress() request
+  // to device.
+  //
+  gBS->Stall (XHC_RESET_RECOVERY_DELAY);
   ZeroMem (&CmdTrbAddr, sizeof (CmdTrbAddr));
   PhyAddr = UsbHcGetPciAddrForHostAddr (Xhc->MemPool, Xhc->UsbDevContext[SlotId].InputContext, sizeof (INPUT_CONTEXT_64));
   CmdTrbAddr.PtrLo    = XHC_LOW_32BIT (PhyAddr);
@@ -2596,6 +2629,11 @@ XhcInitializeEndpointContext (
       EpDesc = (USB_ENDPOINT_DESCRIPTOR *)((UINTN)EpDesc + EpDesc->Length);
     }
 
+    if (EpDesc->Length < sizeof (USB_ENDPOINT_DESCRIPTOR)) {
+      EpDesc = (USB_ENDPOINT_DESCRIPTOR *)((UINTN)EpDesc + EpDesc->Length);
+      continue;
+    }
+
     EpAddr    = (UINT8)(EpDesc->EndpointAddress & 0x0F);
     Direction = (UINT8)((EpDesc->EndpointAddress & 0x80) ? EfiUsbDataIn : EfiUsbDataOut);
 
@@ -2757,6 +2795,11 @@ XhcInitializeEndpointContext64 (
   for (EpIndex = 0; EpIndex < NumEp; EpIndex++) {
     while (EpDesc->DescriptorType != USB_DESC_TYPE_ENDPOINT) {
       EpDesc = (USB_ENDPOINT_DESCRIPTOR *)((UINTN)EpDesc + EpDesc->Length);
+    }
+
+    if (EpDesc->Length < sizeof (USB_ENDPOINT_DESCRIPTOR)) {
+      EpDesc = (USB_ENDPOINT_DESCRIPTOR *)((UINTN)EpDesc + EpDesc->Length);
+      continue;
     }
 
     EpAddr    = (UINT8)(EpDesc->EndpointAddress & 0x0F);
@@ -2928,6 +2971,11 @@ XhcSetConfigCmd (
       IfDesc = (USB_INTERFACE_DESCRIPTOR *)((UINTN)IfDesc + IfDesc->Length);
     }
 
+    if (IfDesc->Length < sizeof (USB_INTERFACE_DESCRIPTOR)) {
+      IfDesc = (USB_INTERFACE_DESCRIPTOR *)((UINTN)IfDesc + IfDesc->Length);
+      continue;
+    }
+
     Dci = XhcInitializeEndpointContext (Xhc, SlotId, DeviceSpeed, InputContext, IfDesc);
     if (Dci > MaxDci) {
       MaxDci = Dci;
@@ -3011,6 +3059,11 @@ XhcSetConfigCmd64 (
   for (Index = 0; Index < ConfigDesc->NumInterfaces; Index++) {
     while ((IfDesc->DescriptorType != USB_DESC_TYPE_INTERFACE) || (IfDesc->AlternateSetting != 0)) {
       IfDesc = (USB_INTERFACE_DESCRIPTOR *)((UINTN)IfDesc + IfDesc->Length);
+    }
+
+    if (IfDesc->Length < sizeof (USB_INTERFACE_DESCRIPTOR)) {
+      IfDesc = (USB_INTERFACE_DESCRIPTOR *)((UINTN)IfDesc + IfDesc->Length);
+      continue;
     }
 
     Dci = XhcInitializeEndpointContext64 (Xhc, SlotId, DeviceSpeed, InputContext, IfDesc);
@@ -3261,7 +3314,7 @@ XhcSetInterface (
 
   IfDesc = (USB_INTERFACE_DESCRIPTOR *)(ConfigDesc + 1);
   while ((UINTN) IfDesc < ((UINTN) ConfigDesc + ConfigDesc->TotalLength)) {
-    if (IfDesc->DescriptorType == USB_DESC_TYPE_INTERFACE) {
+    if ((IfDesc->DescriptorType == USB_DESC_TYPE_INTERFACE) && (IfDesc->Length >= sizeof (USB_INTERFACE_DESCRIPTOR))) {
       if (IfDesc->InterfaceNumber == (UINT8) Request->Index) {
         if (IfDesc->AlternateSetting == Xhc->UsbDevContext[SlotId].ActiveAlternateSetting[IfDesc->InterfaceNumber]) {
           //
@@ -3299,6 +3352,11 @@ XhcSetInterface (
     for (EpIndex = 0; EpIndex < NumEp; EpIndex++) {
       while (EpDesc->DescriptorType != USB_DESC_TYPE_ENDPOINT) {
         EpDesc = (USB_ENDPOINT_DESCRIPTOR *)((UINTN)EpDesc + EpDesc->Length);
+      }
+
+      if (EpDesc->Length < sizeof (USB_ENDPOINT_DESCRIPTOR)) {
+        EpDesc = (USB_ENDPOINT_DESCRIPTOR *)((UINTN)EpDesc + EpDesc->Length);
+        continue;
       }
 
       EpAddr    = (UINT8) (EpDesc->EndpointAddress & 0x0F);
@@ -3458,7 +3516,7 @@ XhcSetInterface64 (
 
   IfDesc = (USB_INTERFACE_DESCRIPTOR *)(ConfigDesc + 1);
   while ((UINTN) IfDesc < ((UINTN) ConfigDesc + ConfigDesc->TotalLength)) {
-    if (IfDesc->DescriptorType == USB_DESC_TYPE_INTERFACE) {
+    if ((IfDesc->DescriptorType == USB_DESC_TYPE_INTERFACE) && (IfDesc->Length >= sizeof (USB_INTERFACE_DESCRIPTOR))) {
       if (IfDesc->InterfaceNumber == (UINT8) Request->Index) {
         if (IfDesc->AlternateSetting == Xhc->UsbDevContext[SlotId].ActiveAlternateSetting[IfDesc->InterfaceNumber]) {
           //
@@ -3496,6 +3554,11 @@ XhcSetInterface64 (
     for (EpIndex = 0; EpIndex < NumEp; EpIndex++) {
       while (EpDesc->DescriptorType != USB_DESC_TYPE_ENDPOINT) {
         EpDesc = (USB_ENDPOINT_DESCRIPTOR *)((UINTN)EpDesc + EpDesc->Length);
+      }
+
+      if (EpDesc->Length < sizeof (USB_ENDPOINT_DESCRIPTOR)) {
+        EpDesc = (USB_ENDPOINT_DESCRIPTOR *)((UINTN)EpDesc + EpDesc->Length);
+        continue;
       }
 
       EpAddr    = (UINT8) (EpDesc->EndpointAddress & 0x0F);

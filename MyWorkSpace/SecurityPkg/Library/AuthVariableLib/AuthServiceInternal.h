@@ -12,7 +12,7 @@
   may not be modified without authorization. If platform fails to protect these resources,
   the authentication service provided in this driver will be broken, and the behavior is undefined.
 
-Copyright (c) 2009 - 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2009 - 2017, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -36,6 +36,8 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
 #include <Guid/AuthenticatedVariableFormat.h>
 #include <Guid/ImageAuthentication.h>
+
+#define TWO_BYTE_ENCODE       0x82
 
 ///
 /// Struct to record signature requirement defined by UEFI spec.
@@ -86,8 +88,10 @@ typedef struct {
 #pragma pack()
 
 ///
-/// "certdb" variable stores the signer's certificates for non PK/KEK/DB/DBX
-/// variables with EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS set.
+///  "certdb" variable stores the signer's certificates for non PK/KEK/DB/DBX
+/// variables with EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS|EFI_VARIABLE_NON_VOLATILE set.
+///  "certdbv" variable stores the signer's certificates for non PK/KEK/DB/DBX
+/// variables with EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS set
 ///
 /// GUID: gEfiCertDbGuid
 ///
@@ -104,7 +108,8 @@ typedef struct {
 /// | AUTH_CERT_DB_DATA          | <-- Last CERT
 /// +----------------------------+
 ///
-#define EFI_CERT_DB_NAME        L"certdb"
+#define EFI_CERT_DB_NAME                 L"certdb"
+#define EFI_CERT_DB_VOLATILE_NAME        L"certdbv"
 
 #pragma pack(1)
 typedef struct {
@@ -129,6 +134,7 @@ extern UINT8    mVendorKeyState;
 extern VOID     *mHashCtx;
 
 extern AUTH_VAR_LIB_CONTEXT_IN *mAuthVarLibContextIn;
+
 
 /**
   Process variable with EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS set
@@ -169,13 +175,15 @@ VerifyTimeBasedPayloadAndUpdate (
 
 /**
   Delete matching signer's certificates when deleting common authenticated
-  variable by corresponding VariableName and VendorGuid from "certdb".
+  variable by corresponding VariableName and VendorGuid from "certdb" or 
+  "certdbv" according to authenticated variable attributes.
 
   @param[in]  VariableName   Name of authenticated Variable.
   @param[in]  VendorGuid     Vendor GUID of authenticated Variable.
+  @param[in]  Attributes        Attributes of authenticated variable.
 
   @retval  EFI_INVALID_PARAMETER Any input parameter is invalid.
-  @retval  EFI_NOT_FOUND         Fail to find "certdb" or matching certs.
+  @retval  EFI_NOT_FOUND         Fail to find "certdb"/"certdbv" or matching certs.
   @retval  EFI_OUT_OF_RESOURCES  The operation is failed due to lack of resources.
   @retval  EFI_SUCCESS           The operation is completed successfully.
 
@@ -183,7 +191,8 @@ VerifyTimeBasedPayloadAndUpdate (
 EFI_STATUS
 DeleteCertsFromDb (
   IN     CHAR16           *VariableName,
-  IN     EFI_GUID         *VendorGuid
+  IN     EFI_GUID         *VendorGuid,
+  IN     UINT32           Attributes
   );
 
 /**
@@ -317,7 +326,7 @@ ProcessVariable (
   IN     EFI_GUID                           *VendorGuid,
   IN     VOID                               *Data,
   IN     UINTN                              DataSize,
-  IN     UINT32                             Attributes OPTIONAL
+  IN     UINT32                             Attributes
   );
 
 /**

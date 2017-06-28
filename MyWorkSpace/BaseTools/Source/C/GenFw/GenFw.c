@@ -1,7 +1,7 @@
 /** @file
 Converts a pe32+ image to an FW, Te image type, or other specific image.
 
-Copyright (c) 2004 - 2014, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2004 - 2016, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -168,7 +168,7 @@ Returns:
   //
   // Copyright declaration
   //
-  fprintf (stdout, "Copyright (c) 2007 - 2014, Intel Corporation. All rights reserved.\n\n");
+  fprintf (stdout, "Copyright (c) 2007 - 2015, Intel Corporation. All rights reserved.\n\n");
 
   //
   // Details Option
@@ -184,9 +184,9 @@ Returns:
                         PIC_PEIM, RELOCATABLE_PEIM, BS_DRIVER, RT_DRIVER,\n\
                         APPLICATION, SAL_RT_DRIVER to support all module types\n\
                         It can only be used together with --keepexceptiontable,\n\
-                        --keepzeropending, -r, -o option.It is a action option.\n\
-                        If it is combined with other action options, the later\n\
-                        input action option will override the previous one.\n");
+                        --keepzeropending, --keepoptionalheader, -r, -o option.\n\
+                        It is a action option. If it is combined with other action options,\n\
+                        the later input action option will override the previous one.\n");
   fprintf (stdout, "  -c, --acpi            Create Acpi table.\n\
                         It can't be combined with other action options\n\
                         except for -o, -r option. It is a action option.\n\
@@ -194,9 +194,9 @@ Returns:
                         input action option will override the previous one.\n");
   fprintf (stdout, "  -t, --terse           Create Te Image.\n\
                         It can only be used together with --keepexceptiontable,\n\
-                        --keepzeropending, -r, -o option.It is a action option.\n\
-                        If it is combined with other action options, the later\n\
-                        input action option will override the previous one.\n");
+                        --keepzeropending, --keepoptionalheader, -r, -o option.\n\
+                        It is a action option. If it is combined with other action options,\n\
+                        the later input action option will override the previous one.\n");
   fprintf (stdout, "  -u, --dump            Dump TeImage Header.\n\
                         It can't be combined with other action options\n\
                         except for -o, -r option. It is a action option.\n\
@@ -244,6 +244,9 @@ Returns:
   fprintf (stdout, "  -p NUM, --pad NUM     NUM is one HEX or DEC format padding value.\n\
                         This option is only used together with -j option.\n");
   fprintf (stdout, "  --keepexceptiontable  Don't clear exception table.\n\
+                        This option can be used together with -e or -t.\n\
+                        It doesn't work for other options.\n");
+  fprintf (stdout, "  --keepoptionalheader  Don't zero PE/COFF optional header fields.\n\
                         This option can be used together with -e or -t.\n\
                         It doesn't work for other options.\n");
   fprintf (stdout, "  --keepzeropending     Don't strip zero pending of .reloc.\n\
@@ -622,6 +625,10 @@ PeCoffConvertImageToXip (
   // Allocate the extra space that we need to grow the image
   //
   XipFile = malloc (XipLength);
+  if (XipFile == NULL) {
+    Error (NULL, 0, 4001, "Resource", "memory cannot be allocated!");
+    return;
+  }
   memset (XipFile, 0, XipLength);
 
   //
@@ -698,6 +705,10 @@ Returns:
                           + 3 * (sizeof (UINT16) + 3 * sizeof (CHAR16)) 
                           + sizeof (EFI_IMAGE_RESOURCE_DATA_ENTRY);
   HiiSectionHeader = malloc (HiiSectionHeaderSize);
+  if (HiiSectionHeader == NULL) {
+    Error (NULL, 0, 4001, "Resource", "memory cannot be allocated!");
+    return NULL;
+  }
   memset (HiiSectionHeader, 0, HiiSectionHeaderSize);
 
   HiiSectionOffset = 0;
@@ -891,13 +902,6 @@ Returns:
   }
 
   //
-  // No available section header is found.
-  //
-  if (Index == ImgHdr->Pe32.FileHeader.NumberOfSections) {
-    return EFI_NOT_FOUND;
-  }
-  
-  //
   // BaseAddress is set to section header.
   //
   return EFI_SUCCESS;
@@ -1079,6 +1083,7 @@ Returns:
   STATUS                           Status;
   BOOLEAN                          ReplaceFlag;
   BOOLEAN                          KeepExceptionTableFlag;
+  BOOLEAN                          KeepOptionalHeaderFlag;
   BOOLEAN                          KeepZeroPendingFlag;
   UINT64                           LogLevel;
   EFI_TE_IMAGE_HEADER              TEImageHeader;
@@ -1096,7 +1101,7 @@ Returns:
   EFI_HII_PACKAGE_LIST_HEADER      HiiPackageListHeader;
   EFI_HII_PACKAGE_HEADER           HiiPackageHeader;
   EFI_IFR_FORM_SET                 IfrFormSet;
-  UINT8                            NumberOfFormPacakge;
+  UINT8                            NumberOfFormPackage;
   EFI_HII_PACKAGE_HEADER           EndPackage;
   UINT32                           HiiSectionHeaderSize;
   UINT8                            *HiiSectionHeader;
@@ -1141,8 +1146,9 @@ Returns:
   Optional32        = NULL;
   Optional64        = NULL;
   KeepExceptionTableFlag = FALSE;
+  KeepOptionalHeaderFlag = FALSE;
   KeepZeroPendingFlag    = FALSE;
-  NumberOfFormPacakge    = 0;
+  NumberOfFormPackage    = 0;
   HiiPackageListBuffer   = NULL;
   HiiPackageDataPointer  = NULL;
   EndPackage.Length      = sizeof (EFI_HII_PACKAGE_HEADER);
@@ -1266,6 +1272,13 @@ Returns:
       KeepExceptionTableFlag = TRUE;
       argc --;
       argv ++;
+      continue;
+    }
+
+    if (stricmp(argv[0], "--keepoptionalheader") == 0) {
+      KeepOptionalHeaderFlag = TRUE;
+      argc--;
+      argv++;
       continue;
     }
 
@@ -1637,7 +1650,7 @@ Returns:
           fread (&IfrFormSet, 1, sizeof (IfrFormSet), fpIn);
           memcpy (&HiiPackageListGuid, &IfrFormSet.Guid, sizeof (EFI_GUID));
         }
-        NumberOfFormPacakge ++;
+        NumberOfFormPackage ++;
       }
       HiiPackageListHeader.PackageLength += FileLength;
       fclose (fpIn);
@@ -1646,7 +1659,7 @@ Returns:
     //
     // Check whether hii packages are valid
     //
-    if (NumberOfFormPacakge > 1) {
+    if (NumberOfFormPackage > 1) {
       Error (NULL, 0, 3000, "Invalid", "The input hii packages contains more than one hii form package");
       goto Finish;
     }
@@ -1688,6 +1701,10 @@ Returns:
       // Create the resource section header
       //
       HiiSectionHeader = CreateHiiResouceSectionHeader (&HiiSectionHeaderSize, HiiPackageListHeader.PackageLength);
+      if (HiiSectionHeader == NULL) {
+        free (HiiPackageListBuffer);
+        goto Finish;
+      }
       //
       // Wrtie section header and HiiData into File.
       //
@@ -2303,19 +2320,20 @@ Returns:
 
   if (PeHdr->Pe32.OptionalHeader.Magic == EFI_IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
     Optional32 = (EFI_IMAGE_OPTIONAL_HEADER32 *)&PeHdr->Pe32.OptionalHeader;
-    Optional32->MajorOperatingSystemVersion = 0;
-    Optional32->MinorOperatingSystemVersion = 0;
-    Optional32->MajorImageVersion           = 0;
-    Optional32->MinorImageVersion           = 0;
-    Optional32->MajorSubsystemVersion       = 0;
-    Optional32->MinorSubsystemVersion       = 0;
-    Optional32->Win32VersionValue           = 0;
-    Optional32->CheckSum                    = 0;
-    Optional32->SizeOfStackReserve = 0;
-    Optional32->SizeOfStackCommit  = 0;
-    Optional32->SizeOfHeapReserve  = 0;
-    Optional32->SizeOfHeapCommit   = 0;
-
+    if (!KeepOptionalHeaderFlag) {
+      Optional32->MajorOperatingSystemVersion = 0;
+      Optional32->MinorOperatingSystemVersion = 0;
+      Optional32->MajorImageVersion = 0;
+      Optional32->MinorImageVersion = 0;
+      Optional32->MajorSubsystemVersion = 0;
+      Optional32->MinorSubsystemVersion = 0;
+      Optional32->Win32VersionValue = 0;
+      Optional32->CheckSum = 0;
+      Optional32->SizeOfStackReserve = 0;
+      Optional32->SizeOfStackCommit = 0;
+      Optional32->SizeOfHeapReserve = 0;
+      Optional32->SizeOfHeapCommit = 0;
+    }
     TEImageHeader.AddressOfEntryPoint = Optional32->AddressOfEntryPoint;
     TEImageHeader.BaseOfCode          = Optional32->BaseOfCode;
     TEImageHeader.ImageBase           = (UINT64) (Optional32->ImageBase);
@@ -2395,19 +2413,20 @@ Returns:
     }
   } else if (PeHdr->Pe32.OptionalHeader.Magic == EFI_IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
     Optional64 = (EFI_IMAGE_OPTIONAL_HEADER64 *)&PeHdr->Pe32.OptionalHeader;
-    Optional64->MajorOperatingSystemVersion = 0;
-    Optional64->MinorOperatingSystemVersion = 0;
-    Optional64->MajorImageVersion           = 0;
-    Optional64->MinorImageVersion           = 0;
-    Optional64->MajorSubsystemVersion       = 0;
-    Optional64->MinorSubsystemVersion       = 0;
-    Optional64->Win32VersionValue           = 0;
-    Optional64->CheckSum                    = 0;
-    Optional64->SizeOfStackReserve = 0;
-    Optional64->SizeOfStackCommit  = 0;
-    Optional64->SizeOfHeapReserve  = 0;
-    Optional64->SizeOfHeapCommit   = 0;
-
+    if (!KeepOptionalHeaderFlag) {
+      Optional64->MajorOperatingSystemVersion = 0;
+      Optional64->MinorOperatingSystemVersion = 0;
+      Optional64->MajorImageVersion = 0;
+      Optional64->MinorImageVersion = 0;
+      Optional64->MajorSubsystemVersion = 0;
+      Optional64->MinorSubsystemVersion = 0;
+      Optional64->Win32VersionValue = 0;
+      Optional64->CheckSum = 0;
+      Optional64->SizeOfStackReserve = 0;
+      Optional64->SizeOfStackCommit = 0;
+      Optional64->SizeOfHeapReserve = 0;
+      Optional64->SizeOfHeapCommit = 0;
+    }
     TEImageHeader.AddressOfEntryPoint = Optional64->AddressOfEntryPoint;
     TEImageHeader.BaseOfCode          = Optional64->BaseOfCode;
     TEImageHeader.ImageBase           = (UINT64) (Optional64->ImageBase);
@@ -2789,8 +2808,8 @@ Returns:
   // Get Debug, Export and Resource EntryTable RVA address.
   // Resource Directory entry need to review.
   //
-  if (FileHdr->Machine == EFI_IMAGE_MACHINE_IA32) {
-    Optional32Hdr = (EFI_IMAGE_OPTIONAL_HEADER32 *) ((UINT8*) FileHdr + sizeof (EFI_IMAGE_FILE_HEADER));
+  Optional32Hdr = (EFI_IMAGE_OPTIONAL_HEADER32 *) ((UINT8*) FileHdr + sizeof (EFI_IMAGE_FILE_HEADER));
+  if (Optional32Hdr->Magic == EFI_IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
     SectionHeader = (EFI_IMAGE_SECTION_HEADER *) ((UINT8 *) Optional32Hdr +  FileHdr->SizeOfOptionalHeader);
     if (Optional32Hdr->NumberOfRvaAndSizes > EFI_IMAGE_DIRECTORY_ENTRY_EXPORT && \
         Optional32Hdr->DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_EXPORT].Size != 0) {
@@ -3021,8 +3040,10 @@ Returns:
   }
 
   ptime = localtime (&newtime);
-  DebugMsg (NULL, 0, 9, "New Image Time Stamp", "%04d-%02d-%02d %02d:%02d:%02d",
-            ptime->tm_year + 1900, ptime->tm_mon + 1, ptime->tm_mday, ptime->tm_hour, ptime->tm_min, ptime->tm_sec);
+  if (ptime != NULL) {
+    DebugMsg (NULL, 0, 9, "New Image Time Stamp", "%04d-%02d-%02d %02d:%02d:%02d",
+              ptime->tm_year + 1900, ptime->tm_mon + 1, ptime->tm_mday, ptime->tm_hour, ptime->tm_min, ptime->tm_sec);
+  }
   //
   // Set new time and data into PeImage.
   //
@@ -3137,7 +3158,7 @@ Returns:
 {
   CHAR8  Line[MAX_LINE_LEN];
   CHAR8  *cptr;
-  unsigned ScannedData = 0;
+  int    ScannedData = 0;
 
   Line[MAX_LINE_LEN - 1]  = 0;
   while (1) {

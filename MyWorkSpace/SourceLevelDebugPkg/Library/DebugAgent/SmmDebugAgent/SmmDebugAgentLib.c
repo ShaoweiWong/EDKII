@@ -1,7 +1,7 @@
 /** @file
   Debug Agent library implementition.
 
-  Copyright (c) 2010 - 2015, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2010 - 2017, Intel Corporation. All rights reserved.<BR>
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
   which accompanies this distribution.  The full text of the license may be found at
@@ -19,6 +19,7 @@ DEBUG_AGENT_MAILBOX         mLocalMailbox;
 UINTN                       mSavedDebugRegisters[6];
 IA32_IDT_GATE_DESCRIPTOR    mIdtEntryTable[33];
 BOOLEAN                     mSkipBreakpoint = FALSE;
+BOOLEAN                     mSmmDebugIdtInitFlag = FALSE;
 
 CHAR8 mWarningMsgIgnoreSmmEntryBreak[] = "Ignore smmentrybreak setting for SMI issued during DXE debugging!\r\n";
 
@@ -243,7 +244,7 @@ InitializeDebugAgent (
     // Initialize Debug Timer hardware and save its frequency
     //
     InitializeDebugTimer (&DebugTimerFrequency, TRUE);
-    UpdateMailboxContent (mMailboxPointer, DEBUG_MAILBOX_DEBUG_TIMER_FREQUENCY, DebugTimerFrequency);
+    UpdateMailboxContent (Mailbox, DEBUG_MAILBOX_DEBUG_TIMER_FREQUENCY, DebugTimerFrequency);
 
     DebugPortHandle = (UINT64) (UINTN)DebugPortInitialize ((DEBUG_PORT_HANDLE) (UINTN)Mailbox->DebugPortHandle, NULL);
     UpdateMailboxContent (Mailbox, DEBUG_MAILBOX_DEBUG_PORT_HANDLE_INDEX, DebugPortHandle);
@@ -276,10 +277,18 @@ InitializeDebugAgent (
 
   case DEBUG_AGENT_INIT_ENTER_SMI:
     SaveDebugRegister ();
-    InitializeDebugIdt ();
+    if (!mSmmDebugIdtInitFlag) {
+      //
+      // We only need to initialize Debug IDT table at first SMI entry
+      // after SMM relocation.
+      //
+      InitializeDebugIdt ();
+      mSmmDebugIdtInitFlag = TRUE;
+    }
     //
     // Check if CPU APIC Timer is working, otherwise initialize it.
     //
+    InitializeLocalApicSoftwareEnable (TRUE);
     GetApicTimerState (NULL, &PeriodicMode, NULL);
     TimerCycle = GetApicTimerInitCount ();
     if (!PeriodicMode || TimerCycle == 0) {
@@ -327,8 +336,8 @@ InitializeDebugAgent (
     } else {
       Ia32Idtr =  (IA32_DESCRIPTOR *) Context;
       Ia32IdtEntry = (IA32_IDT_ENTRY *)(Ia32Idtr->Base);
-      MailboxLocation = (UINT64 *) (UINTN) (Ia32IdtEntry[DEBUG_MAILBOX_VECTOR].Bits.OffsetLow + 
-                                  (UINT32) (Ia32IdtEntry[DEBUG_MAILBOX_VECTOR].Bits.OffsetHigh << 16));
+      MailboxLocation = (UINT64 *) ((UINTN) Ia32IdtEntry[DEBUG_MAILBOX_VECTOR].Bits.OffsetLow +
+                                   ((UINTN) Ia32IdtEntry[DEBUG_MAILBOX_VECTOR].Bits.OffsetHigh << 16));
       mMailboxPointer = (DEBUG_AGENT_MAILBOX *)(UINTN)(*MailboxLocation);
       VerifyMailboxChecksum (mMailboxPointer);
       //

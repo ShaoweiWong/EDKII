@@ -1,6 +1,6 @@
 /**@file
 
-Copyright (c) 2006 - 2013, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2006 - 2017, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -628,6 +628,7 @@ Returns:
   StrCat (TempFileName, L"\\*");
 
   PrivateFile->LHandle = PrivateFile->WinNtThunk->FindFirstFile (TempFileName, &PrivateFile->FindBuf);
+  FreePool (TempFileName);
 
   if (PrivateFile->LHandle == INVALID_HANDLE_VALUE) {
     PrivateFile->IsValidFindBuf = FALSE;
@@ -747,6 +748,12 @@ GetNextFileNameToken (
     // Point *FileName to the next character after L'\'.
     //
     *FileName = *FileName + Offset + 1;
+    //
+    // If *FileName is an empty string, then set *FileName to NULL
+    //
+    if (**FileName == L'\0') {
+      *FileName = NULL;
+    }
   }
 
   return Token;
@@ -1188,6 +1195,7 @@ Returns:
         Status = EFI_NOT_FOUND;
       }
 
+      FreePool (TempFileName);
       goto Done;
     }
 
@@ -1196,6 +1204,7 @@ Returns:
     //
     StrCat (TempFileName, L"\\*");
     NewPrivateFile->LHandle = NewPrivateFile->WinNtThunk->FindFirstFile (TempFileName, &NewPrivateFile->FindBuf);
+    FreePool (TempFileName);
 
     if (NewPrivateFile->LHandle == INVALID_HANDLE_VALUE) {
       NewPrivateFile->IsValidFindBuf = FALSE;
@@ -1276,12 +1285,14 @@ Returns:
     Status = WinNtSimpleFileSystemGetInfo (&NewPrivateFile->EfiFile, &gEfiFileInfoGuid, &InfoSize, Info);
 
     if (EFI_ERROR (Status)) {
+      FreePool (Info);
       goto Done;
     }
 
     Info->Attribute = Attributes;
 
     WinNtSimpleFileSystemSetInfo (&NewPrivateFile->EfiFile, &gEfiFileInfoGuid, InfoSize, Info);
+    FreePool (Info);
   }
 
 Done:
@@ -1361,6 +1372,10 @@ Returns:
     FreePool (PrivateFile->FileName);
   }
 
+  if (PrivateFile->FilePath) {
+    FreePool (PrivateFile->FilePath);
+  }
+
   FreePool (PrivateFile);
 
   gBS->RestoreTPL (OldTpl);
@@ -1431,6 +1446,7 @@ Returns:
   }
 
   FreePool (PrivateFile->FileName);
+  FreePool (PrivateFile->FilePath);
   FreePool (PrivateFile);
 
   gBS->RestoreTPL (OldTpl);
@@ -1977,8 +1993,19 @@ Returns:
   CHAR16                      *TempPointer;
 
   Size        = SIZE_OF_EFI_FILE_INFO;
-  NameSize    = StrSize (PrivateFile->FileName);
-  ResultSize  = Size + NameSize;
+
+  RealFileName  = PrivateFile->FileName;
+  TempPointer   = RealFileName;
+  while (*TempPointer) {
+    if (*TempPointer == '\\') {
+      RealFileName = TempPointer + 1;
+    }
+
+    TempPointer++;
+  }
+  NameSize = StrSize (RealFileName);
+
+  ResultSize = Size + NameSize; 
 
   Status      = EFI_BUFFER_TOO_SMALL;
   if (*BufferSize >= ResultSize) {
@@ -2044,17 +2071,6 @@ Returns:
 
     if (PrivateFile->IsDirectoryPath) {
       Info->Attribute |= EFI_FILE_DIRECTORY;
-    }
-
-    RealFileName  = PrivateFile->FileName;
-    TempPointer   = RealFileName;
-
-    while (*TempPointer) {
-      if (*TempPointer == '\\') {
-        RealFileName = TempPointer + 1;
-      }
-
-      TempPointer++;
     }
 
     if (PrivateFile->IsRootDirectory) {

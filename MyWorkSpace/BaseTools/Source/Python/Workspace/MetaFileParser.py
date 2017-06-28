@@ -1,8 +1,8 @@
 ## @file
 # This file is used to parse meta files
 #
-# Copyright (c) 2008 - 2015, Intel Corporation. All rights reserved.<BR>
-# Copyright (c) 2015, Hewlett Packard Enterprise Development, L.P.<BR>
+# Copyright (c) 2008 - 2017, Intel Corporation. All rights reserved.<BR>
+# (C) Copyright 2015-2016 Hewlett Packard Enterprise Development LP<BR>
 # This program and the accompanying materials
 # are licensed and made available under the terms and conditions of the BSD License
 # which accompanies this distribution.  The full text of the license may be found at
@@ -26,7 +26,7 @@ import Common.GlobalData as GlobalData
 from CommonDataClass.DataClass import *
 from Common.DataType import *
 from Common.String import *
-from Common.Misc import GuidStructureStringToGuidString, CheckPcdDatum, PathClass, AnalyzePcdData, AnalyzeDscPcd
+from Common.Misc import GuidStructureStringToGuidString, CheckPcdDatum, PathClass, AnalyzePcdData, AnalyzeDscPcd, AnalyzePcdExpression
 from Common.Expression import *
 from CommonDataClass.Exceptions import *
 from Common.LongFilePathSupport import OpenLongFilePath as open
@@ -144,14 +144,15 @@ class MetaFileParser(object):
     #
     #   @param      FilePath        The path of platform description file
     #   @param      FileType        The raw data of DSC file
+    #   @param      Arch            Default Arch value for filtering sections
     #   @param      Table           Database used to retrieve module/package information
-    #   @param      Macros          Macros used for replacement in file
     #   @param      Owner           Owner ID (for sub-section parsing)
     #   @param      From            ID from which the data comes (for !INCLUDE directive)
     #
-    def __init__(self, FilePath, FileType, Table, Owner= -1, From= -1):
+    def __init__(self, FilePath, FileType, Arch, Table, Owner= -1, From= -1):
         self._Table = Table
         self._RawTable = Table
+        self._Arch = Arch
         self._FileType = FileType
         self.MetaFile = FilePath
         self._FileDir = self.MetaFile.Dir
@@ -211,6 +212,15 @@ class MetaFileParser(object):
     def _SetFinished(self, Value):
         self._Finished = Value
 
+    ## Remove records that do not match given Filter Arch
+    def _FilterRecordList(self, RecordList, FilterArch):
+        NewRecordList = []
+        for Record in RecordList:
+            Arch = Record[3]
+            if Arch == 'COMMON' or Arch == FilterArch:
+                NewRecordList.append(Record)
+        return NewRecordList
+
     ## Use [] style to query data in table, just for readability
     #
     #   DataInfo = [data_type, scope1(arch), scope2(platform/moduletype)]
@@ -230,13 +240,13 @@ class MetaFileParser(object):
 
         # No specific ARCH or Platform given, use raw data
         if self._RawTable and (len(DataInfo) == 1 or DataInfo[1] == None):
-            return self._RawTable.Query(*DataInfo)
+            return self._FilterRecordList(self._RawTable.Query(*DataInfo), self._Arch)
 
         # Do post-process if necessary
         if not self._PostProcessed:
             self._PostProcess()
 
-        return self._Table.Query(*DataInfo)
+        return self._FilterRecordList(self._Table.Query(*DataInfo), DataInfo[1])
 
     ## Data parser for the common format in different type of file
     #
@@ -341,11 +351,23 @@ class MetaFileParser(object):
 
         self._ValueList = [ReplaceMacro(Value, self._Macros) for Value in self._ValueList]
         Name, Value = self._ValueList[1], self._ValueList[2]
+        MacroUsed = GlobalData.gMacroRefPattern.findall(Value)
+        if len(MacroUsed) != 0:
+            for Macro in MacroUsed:
+                if Macro in GlobalData.gGlobalDefines:
+                    EdkLogger.error("Parser", FORMAT_INVALID, "Global macro %s is not permitted." % (Macro), ExtraData=self._CurrentLine, File=self.MetaFile, Line=self._LineIndex + 1)
+            else:
+                EdkLogger.error("Parser", FORMAT_INVALID, "%s not defined" % (Macro), ExtraData=self._CurrentLine, File=self.MetaFile, Line=self._LineIndex + 1)
         # Sometimes, we need to make differences between EDK and EDK2 modules 
         if Name == 'INF_VERSION':
-            try:
-                self._Version = int(Value, 0)
-            except:
+            if re.match(r'0[xX][\da-f-A-F]{5,8}', Value):
+                self._Version = int(Value, 0)   
+            elif re.match(r'\d+\.\d+', Value):
+                ValueList = Value.split('.')
+                Major = '%04o' % int(ValueList[0], 0)
+                Minor = '%04o' % int(ValueList[1], 0)
+                self._Version = int('0x' + Major + Minor, 0)
+            else:
                 EdkLogger.error('Parser', FORMAT_INVALID, "Invalid version number",
                                 ExtraData=self._CurrentLine, File=self.MetaFile, Line=self._LineIndex + 1)
 
@@ -485,14 +507,14 @@ class InfParser(MetaFileParser):
     #
     #   @param      FilePath        The path of module description file
     #   @param      FileType        The raw data of DSC file
+    #   @param      Arch            Default Arch value for filtering sections
     #   @param      Table           Database used to retrieve module/package information
-    #   @param      Macros          Macros used for replacement in file
     #
-    def __init__(self, FilePath, FileType, Table):
+    def __init__(self, FilePath, FileType, Arch, Table):
         # prevent re-initialization
         if hasattr(self, "_Table"):
             return
-        MetaFileParser.__init__(self, FilePath, FileType, Table)
+        MetaFileParser.__init__(self, FilePath, FileType, Arch, Table)
         self.PcdsDict = {}
 
     ## Parser starter
@@ -826,7 +848,9 @@ class DscParser(MetaFileParser):
         "ISO_LANGUAGES",
         "TIME_STAMP_FILE",
         "VPD_TOOL_GUID",
-        "FIX_LOAD_TOP_MEMORY_ADDRESS"
+        "FIX_LOAD_TOP_MEMORY_ADDRESS",
+        "PREBUILD",
+        "POSTBUILD"
     ]
 
     SubSectionDefineKeywords = [
@@ -835,22 +859,24 @@ class DscParser(MetaFileParser):
 
     SymbolPattern = ValueExpression.SymbolPattern
 
+    IncludedFiles = set()
+
     ## Constructor of DscParser
     #
     #  Initialize object of DscParser
     #
     #   @param      FilePath        The path of platform description file
     #   @param      FileType        The raw data of DSC file
+    #   @param      Arch            Default Arch value for filtering sections
     #   @param      Table           Database used to retrieve module/package information
-    #   @param      Macros          Macros used for replacement in file
     #   @param      Owner           Owner ID (for sub-section parsing)
     #   @param      From            ID from which the data comes (for !INCLUDE directive)
     #
-    def __init__(self, FilePath, FileType, Table, Owner= -1, From= -1):
+    def __init__(self, FilePath, FileType, Arch, Table, Owner= -1, From= -1):
         # prevent re-initialization
         if hasattr(self, "_Table"):
             return
-        MetaFileParser.__init__(self, FilePath, FileType, Table, Owner, From)
+        MetaFileParser.__init__(self, FilePath, FileType, Arch, Table, Owner, From)
         self._Version = 0x00010005  # Only EDK2 dsc file is supported
         # to store conditional directive evaluation result
         self._DirectiveStack = []
@@ -908,6 +934,8 @@ class DscParser(MetaFileParser):
             elif Line[0] == '!':
                 self._DirectiveParser()
                 continue
+            if Line[0] == TAB_OPTION_START and not self._InSubsection:
+                EdkLogger.error("Parser", FILE_READ_FAILURE, "Missing the '{' before %s in Line %s" % (Line, Index+1),ExtraData=self.MetaFile)
 
             if self._InSubsection:
                 SectionType = self._SubsectionType
@@ -1472,8 +1500,10 @@ class DscParser(MetaFileParser):
 
             IncludedFileTable = MetaFileStorage(self._Table.Cur, IncludedFile1, MODEL_FILE_DSC, False)
             Owner = self._Content[self._ContentIndex - 1][0]
-            Parser = DscParser(IncludedFile1, self._FileType, IncludedFileTable,
+            Parser = DscParser(IncludedFile1, self._FileType, self._Arch, IncludedFileTable,
                                Owner=Owner, From=Owner)
+
+            self.IncludedFiles.add (IncludedFile1)
 
             # Does not allow lower level included file to include upper level included file
             if Parser._From != Owner and int(Owner) > int (Parser._From):
@@ -1520,7 +1550,7 @@ class DscParser(MetaFileParser):
 
         ValList, Valid, Index = AnalyzeDscPcd(self._ValueList[2], self._ItemType)
         if not Valid:
-            EdkLogger.error('build', FORMAT_INVALID, "Pcd format incorrect.", File=self._FileWithError, Line=self._LineIndex+1,
+            EdkLogger.error('build', FORMAT_INVALID, "Pcd format incorrect.", File=self._FileWithError, Line=self._LineIndex + 1,
                             ExtraData="%s.%s|%s" % (self._ValueList[0], self._ValueList[1], self._ValueList[2]))
         PcdValue = ValList[Index]
         if PcdValue:
@@ -1605,17 +1635,18 @@ class DecParser(MetaFileParser):
     #
     #   @param      FilePath        The path of platform description file
     #   @param      FileType        The raw data of DSC file
+    #   @param      Arch            Default Arch value for filtering sections
     #   @param      Table           Database used to retrieve module/package information
-    #   @param      Macros          Macros used for replacement in file
     #
-    def __init__(self, FilePath, FileType, Table):
+    def __init__(self, FilePath, FileType, Arch, Table):
         # prevent re-initialization
         if hasattr(self, "_Table"):
             return
-        MetaFileParser.__init__(self, FilePath, FileType, Table, -1)
+        MetaFileParser.__init__(self, FilePath, FileType, Arch, Table, -1)
         self._Comments = []
         self._Version = 0x00010005  # Only EDK2 dec file is supported
         self._AllPCDs = [] # Only for check duplicate PCD
+        self._AllPcdDict = {}
 
     ## Parser starter
     def Start(self):
@@ -1703,6 +1734,7 @@ class DecParser(MetaFileParser):
         self._SectionName = ''
         self._SectionType = []
         ArchList = set()
+        PrivateList = set()
         Line = self._CurrentLine.replace("%s%s" % (TAB_COMMA_SPLIT, TAB_SPACE_SPLIT), TAB_COMMA_SPLIT)
         for Item in Line[1:-1].split(TAB_COMMA_SPLIT):
             if Item == '':
@@ -1738,14 +1770,25 @@ class DecParser(MetaFileParser):
             # S2 may be Platform or ModuleType
             if len(ItemList) > 2:
                 S2 = ItemList[2].upper()
+                # only Includes, GUIDs, PPIs, Protocols section have Private tag
+                if self._SectionName in [TAB_INCLUDES.upper(), TAB_GUIDS.upper(), TAB_PROTOCOLS.upper(), TAB_PPIS.upper()]:
+                    if S2 != 'PRIVATE':
+                        EdkLogger.error("Parser", FORMAT_INVALID, 'Please use keyword "Private" as section tag modifier.',
+                                        File=self.MetaFile, Line=self._LineIndex + 1, ExtraData=self._CurrentLine)
             else:
                 S2 = 'COMMON'
+            PrivateList.add(S2)
             if [S1, S2, self.DataType[self._SectionName]] not in self._Scope:
                 self._Scope.append([S1, S2, self.DataType[self._SectionName]])
 
         # 'COMMON' must not be used with specific ARCHs at the same section
         if 'COMMON' in ArchList and len(ArchList) > 1:
             EdkLogger.error('Parser', FORMAT_INVALID, "'common' ARCH must not be used with specific ARCHs",
+                            File=self.MetaFile, Line=self._LineIndex + 1, ExtraData=self._CurrentLine)
+
+        # It is not permissible to mix section tags without the Private attribute with section tags with the Private attribute
+        if 'COMMON' in PrivateList and len(PrivateList) > 1:
+            EdkLogger.error('Parser', FORMAT_INVALID, "Can't mix section tags without the Private attribute with section tags with the Private attribute",
                             File=self.MetaFile, Line=self._LineIndex + 1, ExtraData=self._CurrentLine)
 
     ## [guids], [ppis] and [protocols] section parser
@@ -1817,10 +1860,10 @@ class DecParser(MetaFileParser):
         # Has VOID* type string, may contain "|" character in the string. 
         if len(PtrValue) != 0:
             ptrValueList = re.sub(ValueRe, '', TokenList[1])
-            ValueList = GetSplitValueList(ptrValueList)
+            ValueList = AnalyzePcdExpression(ptrValueList)
             ValueList[0] = PtrValue[0]
         else:
-            ValueList = GetSplitValueList(TokenList[1])
+            ValueList = AnalyzePcdExpression(TokenList[1])
 
 
         # check if there's enough datum information given
@@ -1847,6 +1890,19 @@ class DecParser(MetaFileParser):
                             ExtraData=self._CurrentLine + \
                                       " (<TokenSpaceGuidCName>.<PcdCName>|<DefaultValue>|<DatumType>|<Token>)",
                             File=self.MetaFile, Line=self._LineIndex + 1)
+
+        PcdValue = ValueList[0]
+        if PcdValue:
+            try:
+                ValueList[0] = ValueExpression(PcdValue, self._AllPcdDict)(True)
+            except WrnExpression, Value:
+                ValueList[0] = Value.result
+
+        if ValueList[0] == 'True':
+            ValueList[0] = '1'
+        if ValueList[0] == 'False':
+            ValueList[0] = '0'
+
         # check format of default value against the datum type
         IsValid, Cause = CheckPcdDatum(ValueList[1], ValueList[0])
         if not IsValid:
@@ -1865,6 +1921,7 @@ class DecParser(MetaFileParser):
                             ExtraData=self._CurrentLine, File=self.MetaFile, Line=self._LineIndex + 1)
         else:
             self._AllPCDs.append((self._Scope[0], self._ValueList[0], self._ValueList[1]))
+            self._AllPcdDict[TAB_SPLIT.join(self._ValueList[0:2])] = ValueList[0]
 
         self._ValueList[2] = ValueList[0].strip() + '|' + ValueList[1].strip() + '|' + ValueList[2].strip()
 

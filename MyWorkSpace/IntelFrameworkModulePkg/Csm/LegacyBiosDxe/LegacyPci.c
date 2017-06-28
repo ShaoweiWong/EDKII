@@ -1,6 +1,6 @@
 /** @file
 
-Copyright (c) 2006 - 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2006 - 2017, Intel Corporation. All rights reserved.<BR>
 
 This program and the accompanying materials
 are licensed and made available under the terms and conditions
@@ -318,7 +318,7 @@ GetPciLegacyRom (
       break;
     }
 
-    if ((UINTN)(RomHeader.Raw - (UINT8 *) *Rom) + Pcir->ImageLength * 512 > *ImageSize) {
+    if (((UINTN)RomHeader.Raw - (UINTN)*Rom) + Pcir->ImageLength * 512 > *ImageSize) {
       break;
     }
     
@@ -1812,7 +1812,7 @@ PciShadowRoms (
   @param  RomSize                Size of ROM Image
   @param  Flags                  Indicates if ROM found and if PC-AT.
 
-  @retval EFI_SUCCESS            Legacy Option ROM availible for this device
+  @retval EFI_SUCCESS            Legacy Option ROM available for this device
   @retval EFI_UNSUPPORTED        Legacy Option ROM not supported.
 
 **/
@@ -1854,7 +1854,7 @@ LegacyBiosCheckPciRom (
     @param[out] OpromRevision          Revision of the PCI Rom
     @param[out] ConfigUtilityCodeHeaderPointer of Configuration Utility Code Header
 
-    @return EFI_SUCCESS            Legacy Option ROM availible for this device
+    @return EFI_SUCCESS            Legacy Option ROM available for this device
     @return EFI_ALREADY_STARTED    This device is already managed by its Oprom
     @return EFI_UNSUPPORTED        Legacy Option ROM not supported.
 

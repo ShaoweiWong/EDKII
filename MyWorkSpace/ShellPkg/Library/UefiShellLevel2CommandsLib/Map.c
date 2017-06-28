@@ -1,8 +1,10 @@
 /** @file
   Main file for map shell level 2 command.
 
-  (C) Copyright 2013-2015 Hewlett-Packard Development Company, L.P.<BR>
   Copyright (c) 2009 - 2015, Intel Corporation. All rights reserved.<BR>
+  (C) Copyright 2013-2015 Hewlett-Packard Development Company, L.P.<BR>
+  (C) Copyright 2016 Hewlett Packard Enterprise Development LP<BR>
+  
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
   which accompanies this distribution.  The full text of the license may be found at
@@ -32,7 +34,6 @@
   @retval FALSE           String has at least one other character.
 **/
 BOOLEAN
-EFIAPI
 IsNumberLetterOnly(
   IN CONST CHAR16 *String,
   IN CONST UINTN  Len
@@ -63,7 +64,6 @@ IsNumberLetterOnly(
                           items (";" normally). 
 **/
 BOOLEAN
-EFIAPI
 SearchList(
   IN CONST CHAR16   *List,
   IN CONST CHAR16   *MetaTarget,
@@ -131,7 +131,6 @@ SearchList(
   @retval STR_MAP_MEDIA_FLOPPY    The media is a floppy drive.
 **/
 CHAR16*
-EFIAPI
 GetDeviceMediaType (
   IN  EFI_DEVICE_PATH_PROTOCOL     *DevicePath
   )
@@ -177,7 +176,6 @@ GetDeviceMediaType (
   @retval FALSE                     The handle does not have removable storage.
 **/
 BOOLEAN
-EFIAPI
 IsRemoveableDevice (
   IN EFI_DEVICE_PATH_PROTOCOL      *DevicePath
   )
@@ -214,7 +212,6 @@ IsRemoveableDevice (
   @retval FALSE               The map should not be displayed.
 **/
 BOOLEAN
-EFIAPI
 MappingListHasType(
   IN CONST CHAR16     *MapList,
   IN CONST CHAR16     *Specific,
@@ -285,7 +282,6 @@ MappingListHasType(
   @retval EFI_SUCCESS               The mapping was displayed.
 **/
 EFI_STATUS
-EFIAPI
 PerformSingleMappingDisplay(
   IN CONST BOOLEAN    Verbose,
   IN CONST BOOLEAN    Consist,
@@ -459,7 +455,6 @@ PerformSingleMappingDisplay(
   @retval EFI_NOT_FOUND   Name was not a map on Handle.
 **/
 EFI_STATUS
-EFIAPI
 PerformSingleMappingDelete(
   IN CONST CHAR16     *Specific,
   IN CONST EFI_HANDLE Handle
@@ -510,7 +505,6 @@ CONST CHAR16 AnyF[] = L"F*";
 
 **/
 SHELL_STATUS
-EFIAPI
 PerformMappingDisplay(
   IN CONST BOOLEAN Verbose,
   IN CONST BOOLEAN Consist,
@@ -688,7 +682,6 @@ PerformMappingDisplay(
   @sa PerformMappingDisplay
 **/
 SHELL_STATUS
-EFIAPI
 PerformMappingDisplay2(
   IN CONST BOOLEAN Verbose,
   IN CONST BOOLEAN Consist,
@@ -741,7 +734,6 @@ PerformMappingDisplay2(
   @retval EFI_NOT_FOUND             Specific could not be found.
 **/
 EFI_STATUS
-EFIAPI
 PerformMappingDelete(
   IN CONST CHAR16  *Specific
   )
@@ -872,7 +864,6 @@ PerformMappingDelete(
 
 **/
 SHELL_STATUS
-EFIAPI
 AddMappingFromMapping(
   IN CONST CHAR16     *Map,
   IN CONST CHAR16     *SName
@@ -929,7 +920,6 @@ AddMappingFromMapping(
 
 **/
 SHELL_STATUS
-EFIAPI
 AddMappingFromHandle(
   IN CONST EFI_HANDLE Handle,
   IN CONST CHAR16     *SName
@@ -1196,51 +1186,48 @@ ShellCommandRunMap (
             ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_PARAM_INV), gShellLevel2HiiHandle, L"map", Mapping);  
             ShellStatus = SHELL_INVALID_PARAMETER;
           } else {
-            if (MapAsHandle != NULL) {
-              TempStringLength = StrLen(SName);
-              if (!IsNumberLetterOnly(SName, TempStringLength-(SName[TempStringLength-1]==L':'?1:0))) {
-                ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_PARAM_INV), gShellLevel2HiiHandle, L"map", SName);
-                ShellStatus = SHELL_INVALID_PARAMETER;
-              } else {
+            TempStringLength = StrLen(SName);
+            if (!IsNumberLetterOnly(SName, TempStringLength-(SName[TempStringLength-1]==L':'?1:0))) {
+              ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_PARAM_INV), gShellLevel2HiiHandle, L"map", SName);
+              ShellStatus = SHELL_INVALID_PARAMETER;
+            }
+
+            if (ShellStatus == SHELL_SUCCESS) {
+              if (MapAsHandle != NULL) {
                 ShellStatus = AddMappingFromHandle(MapAsHandle, SName);
-              }
-            } else {
-              TempStringLength = StrLen(SName);
-              if (!IsNumberLetterOnly(SName, TempStringLength-(SName[TempStringLength-1]==L':'?1:0))) {
-                ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_PARAM_INV), gShellLevel2HiiHandle, L"map", SName);
-                ShellStatus = SHELL_INVALID_PARAMETER;
               } else {
                 ShellStatus = AddMappingFromMapping(Mapping, SName);
               }
+
+              if (ShellStatus != SHELL_SUCCESS) {
+                switch (ShellStatus) {
+                  case SHELL_ACCESS_DENIED:
+                    ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_ERR_AD), gShellLevel2HiiHandle, L"map");
+                    break;
+                  case SHELL_INVALID_PARAMETER:
+                    ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_PARAM_INV), gShellLevel2HiiHandle, L"map", Mapping);
+                    break;
+                  case SHELL_DEVICE_ERROR:
+                    ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_MAP_NOF), gShellLevel2HiiHandle, L"map", Mapping);
+                    break;
+                  default:
+                    ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_ERR_UK), gShellLevel2HiiHandle, L"map", ShellStatus|MAX_BIT);
+                }
+              } else {
+                //
+                // now do the display...
+                //
+                ShellStatus = PerformMappingDisplay(
+                  FALSE,
+                  FALSE,
+                  FALSE,
+                  NULL,
+                  SfoMode,
+                  SName,
+                  TRUE
+                 );
+              } // we were sucessful so do an output
             }
-            if (ShellStatus != SHELL_SUCCESS) {
-              switch (ShellStatus) {
-                case SHELL_ACCESS_DENIED:
-                  ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_ERR_AD), gShellLevel2HiiHandle, L"map");
-                  break;
-                case SHELL_INVALID_PARAMETER:
-                  ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_PARAM_INV), gShellLevel2HiiHandle, L"map", Mapping);
-                  break;
-                case SHELL_DEVICE_ERROR:
-                  ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_MAP_NOF), gShellLevel2HiiHandle, L"map", Mapping);
-                  break;
-                default:
-                  ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_GEN_ERR_UK), gShellLevel2HiiHandle, L"map", ShellStatus|MAX_BIT);
-              }
-            } else {
-              //
-              // now do the display...
-              //
-              ShellStatus = PerformMappingDisplay(
-                FALSE,
-                FALSE,
-                FALSE,
-                NULL,
-                SfoMode,
-                SName,
-                TRUE
-               );
-            } // we were sucessful so do an output
           } // got a valid map target
         } // got 2 variables
       } // we are adding a mapping

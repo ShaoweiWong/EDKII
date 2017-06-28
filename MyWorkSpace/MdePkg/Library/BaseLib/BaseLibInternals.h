@@ -1,7 +1,7 @@
 /** @file
   Declaration of internal functions in BaseLib.
 
-  Copyright (c) 2006 - 2010, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2006 - 2017, Intel Corporation. All rights reserved.<BR>
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
   which accompanies this distribution.  The full text of the license may be found at
@@ -477,6 +477,170 @@ InternalLongJump (
   );
 
 
+/**
+  Check if a Unicode character is a decimal character.
+
+  This internal function checks if a Unicode character is a
+  decimal character. The valid decimal character is from
+  L'0' to L'9'.
+
+  @param  Char  The character to check against.
+
+  @retval TRUE  If the Char is a decmial character.
+  @retval FALSE If the Char is not a decmial character.
+
+**/
+BOOLEAN
+EFIAPI
+InternalIsDecimalDigitCharacter (
+  IN      CHAR16                    Char
+  );
+
+
+/**
+  Convert a Unicode character to upper case only if
+  it maps to a valid small-case ASCII character.
+
+  This internal function only deal with Unicode character
+  which maps to a valid small-case ASCII character, i.e.
+  L'a' to L'z'. For other Unicode character, the input character
+  is returned directly.
+
+  @param  Char  The character to convert.
+
+  @retval LowerCharacter   If the Char is with range L'a' to L'z'.
+  @retval Unchanged        Otherwise.
+
+**/
+CHAR16
+EFIAPI
+InternalCharToUpper (
+  IN      CHAR16                    Char
+  );
+
+
+/**
+  Convert a Unicode character to numerical value.
+
+  This internal function only deal with Unicode character
+  which maps to a valid hexadecimal ASII character, i.e.
+  L'0' to L'9', L'a' to L'f' or L'A' to L'F'. For other
+  Unicode character, the value returned does not make sense.
+
+  @param  Char  The character to convert.
+
+  @return The numerical value converted.
+
+**/
+UINTN
+EFIAPI
+InternalHexCharToUintn (
+  IN      CHAR16                    Char
+  );
+
+
+/**
+  Check if a Unicode character is a hexadecimal character.
+
+  This internal function checks if a Unicode character is a
+  decimal character.  The valid hexadecimal character is
+  L'0' to L'9', L'a' to L'f', or L'A' to L'F'.
+
+
+  @param  Char  The character to check against.
+
+  @retval TRUE  If the Char is a hexadecmial character.
+  @retval FALSE If the Char is not a hexadecmial character.
+
+**/
+BOOLEAN
+EFIAPI
+InternalIsHexaDecimalDigitCharacter (
+  IN      CHAR16                    Char
+  );
+
+
+/**
+  Check if a ASCII character is a decimal character.
+
+  This internal function checks if a Unicode character is a
+  decimal character. The valid decimal character is from
+  '0' to '9'.
+
+  @param  Char  The character to check against.
+
+  @retval TRUE  If the Char is a decmial character.
+  @retval FALSE If the Char is not a decmial character.
+
+**/
+BOOLEAN
+EFIAPI
+InternalAsciiIsDecimalDigitCharacter (
+  IN      CHAR8                     Char
+  );
+
+
+/**
+  Converts a lowercase Ascii character to upper one.
+
+  If Chr is lowercase Ascii character, then converts it to upper one.
+
+  If Value >= 0xA0, then ASSERT().
+  If (Value & 0x0F) >= 0x0A, then ASSERT().
+
+  @param  Chr   one Ascii character
+
+  @return The uppercase value of Ascii character
+
+**/
+CHAR8
+EFIAPI
+InternalBaseLibAsciiToUpper (
+  IN      CHAR8                     Chr
+  );
+
+
+/**
+  Check if a ASCII character is a hexadecimal character.
+
+  This internal function checks if a ASCII character is a
+  decimal character.  The valid hexadecimal character is
+  L'0' to L'9', L'a' to L'f', or L'A' to L'F'.
+
+
+  @param  Char  The character to check against.
+
+  @retval TRUE  If the Char is a hexadecmial character.
+  @retval FALSE If the Char is not a hexadecmial character.
+
+**/
+BOOLEAN
+EFIAPI
+InternalAsciiIsHexaDecimalDigitCharacter (
+  IN      CHAR8                    Char
+  );
+
+
+/**
+  Convert a ASCII character to numerical value.
+
+  This internal function only deal with Unicode character
+  which maps to a valid hexadecimal ASII character, i.e.
+  '0' to '9', 'a' to 'f' or 'A' to 'F'. For other
+  ASCII character, the value returned does not make sense.
+
+  @param  Char  The character to convert.
+
+  @return The numerical value converted.
+
+**/
+UINTN
+EFIAPI
+InternalAsciiHexCharToUintn (
+  IN      CHAR8                    Char
+  );
+
+
 //
 // Ia32 and x64 specific functions
 //
@@ -726,6 +890,52 @@ InternalX86DisablePaging64 (
   IN      UINT32                    Context1,  OPTIONAL
   IN      UINT32                    Context2,  OPTIONAL
   IN      UINT32                    NewStack
+  );
+
+/**
+  Generates a 16-bit random number through RDRAND instruction.
+
+  @param[out]  Rand     Buffer pointer to store the random result.
+
+  @retval TRUE          RDRAND call was successful.
+  @retval FALSE         Failed attempts to call RDRAND.
+
+ **/
+BOOLEAN
+EFIAPI
+InternalX86RdRand16 (
+  OUT     UINT16                    *Rand
+  );
+
+/**
+  Generates a 32-bit random number through RDRAND instruction.
+
+  @param[out]  Rand     Buffer pointer to store the random result.
+
+  @retval TRUE          RDRAND call was successful.
+  @retval FALSE         Failed attempts to call RDRAND.
+
+**/
+BOOLEAN
+EFIAPI
+InternalX86RdRand32 (
+  OUT     UINT32                    *Rand
+  );
+
+/**
+  Generates a 64-bit random number through RDRAND instruction.
+
+
+  @param[out]  Rand     Buffer pointer to store the random result.
+
+  @retval TRUE          RDRAND call was successful.
+  @retval FALSE         Failed attempts to call RDRAND.
+
+**/
+BOOLEAN
+EFIAPI
+InternalX86RdRand64  (
+  OUT     UINT64                    *Rand
   );
 
 

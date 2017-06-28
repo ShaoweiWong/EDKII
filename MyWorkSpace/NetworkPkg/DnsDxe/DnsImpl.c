@@ -1,7 +1,7 @@
 /** @file
 DnsDxe support functions implementation.
   
-Copyright (c) 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2016 - 2017, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -565,7 +565,7 @@ Dns4GetMapping (
     return FALSE;
   }
 
-  while (!EFI_ERROR (gBS->CheckEvent (Service->TimerToGetMap))) {
+  while (EFI_ERROR (gBS->CheckEvent (Service->TimerToGetMap))) {
     Udp->Poll (Udp);
 
     if (!EFI_ERROR (Udp->GetModeData (Udp, NULL, &Ip4Mode, NULL, NULL)) &&
@@ -615,14 +615,40 @@ Dns6GetMapping (
     return FALSE;
   }
 
-  while (!EFI_ERROR (gBS->CheckEvent (Service->TimerToGetMap))) {
+  while (EFI_ERROR (gBS->CheckEvent (Service->TimerToGetMap))) {
     Udp->Poll (Udp);
 
-    if (!EFI_ERROR (Udp->GetModeData (Udp, NULL, &Ip6Mode, NULL, NULL)) &&
-        Ip6Mode.IsConfigured) {
+    if (!EFI_ERROR (Udp->GetModeData (Udp, NULL, &Ip6Mode, NULL, NULL))) {
+      if (Ip6Mode.AddressList != NULL) {
+        FreePool (Ip6Mode.AddressList);
+      }
 
-      Udp->Configure (Udp, NULL);
-      return (BOOLEAN) (Udp->Configure (Udp, UdpCfgData) == EFI_SUCCESS);
+      if (Ip6Mode.GroupTable != NULL) {
+        FreePool (Ip6Mode.GroupTable);
+      }
+
+      if (Ip6Mode.RouteTable != NULL) {
+        FreePool (Ip6Mode.RouteTable);
+      }
+
+      if (Ip6Mode.NeighborCache != NULL) {
+        FreePool (Ip6Mode.NeighborCache);
+      }
+
+      if (Ip6Mode.PrefixTable != NULL) {
+        FreePool (Ip6Mode.PrefixTable);
+      }
+
+      if (Ip6Mode.IcmpTypeList != NULL) {
+        FreePool (Ip6Mode.IcmpTypeList);
+      }
+
+      if (!Ip6Mode.IsStarted || Ip6Mode.IsConfigured) {
+        Udp->Configure (Udp, NULL);
+        if (Udp->Configure (Udp, UdpCfgData) == EFI_SUCCESS) {
+          return TRUE;
+        }
+      }
     }
   }
 
@@ -1019,6 +1045,7 @@ AddDns6ServerIp (
   @param  TokensMap       All DNS transmittal Tokens entry.  
   @param  Identification  Identification for queried packet.  
   @param  Type            Type for queried packet.
+  @param  Class           Class for queried packet.
   @param  Item            Return corresponding Token entry.
 
   @retval TRUE            The response is valid.
@@ -1030,6 +1057,7 @@ IsValidDnsResponse (
   IN     NET_MAP      *TokensMap,
   IN     UINT16       Identification,
   IN     UINT16       Type,
+  IN     UINT16       Class,
      OUT NET_MAP_ITEM **Item
   )
 {
@@ -1053,17 +1081,16 @@ IsValidDnsResponse (
       DnsHeader = (DNS_HEADER *) TxString;
       QueryName = (CHAR8 *) (TxString + sizeof (*DnsHeader));
       QuerySection = (DNS_QUERY_SECTION *) (QueryName + AsciiStrLen (QueryName) + 1);
-
-      DnsHeader->Identification = NTOHS (DnsHeader->Identification);
-      QuerySection->Type = NTOHS (QuerySection->Type);
         
-      if (DnsHeader->Identification == Identification && QuerySection->Type == Type) {
+      if (NTOHS (DnsHeader->Identification) == Identification &&
+          NTOHS (QuerySection->Type) == Type && 
+          NTOHS (QuerySection->Class) == Class) {
         return TRUE;
       }
     } 
   }
   
-  *Item =NULL;
+  *Item = NULL;
   
   return FALSE;
 }
@@ -1100,13 +1127,18 @@ ParseDnsResponse (
   DNS6_TOKEN_ENTRY      *Dns6TokenEntry;
   
   UINT32                IpCount;
+  UINT32                RRCount;
   UINT32                AnswerSectionNum;
+  UINT32                CNameTtl;
   
   EFI_IPv4_ADDRESS      *HostAddr4;
   EFI_IPv6_ADDRESS      *HostAddr6;
 
   EFI_DNS4_CACHE_ENTRY  *Dns4CacheEntry;
   EFI_DNS6_CACHE_ENTRY  *Dns6CacheEntry;
+
+  DNS_RESOURCE_RECORD   *Dns4RR;
+  DNS6_RESOURCE_RECORD  *Dns6RR;
 
   EFI_STATUS            Status;
 
@@ -1117,13 +1149,18 @@ ParseDnsResponse (
   Dns6TokenEntry   = NULL;
   
   IpCount          = 0;
+  RRCount          = 0;
   AnswerSectionNum = 0;
+  CNameTtl         = 0;
   
   HostAddr4        = NULL;
   HostAddr6        = NULL;
   
   Dns4CacheEntry   = NULL;
   Dns6CacheEntry   = NULL;
+  
+  Dns4RR           = NULL;
+  Dns6RR           = NULL;
 
   *Completed       = TRUE;
   Status           = EFI_SUCCESS;
@@ -1163,7 +1200,13 @@ ParseDnsResponse (
   // Check DnsResponse Validity, if so, also get a valid NET_MAP_ITEM.
   //
   if (Instance->Service->IpVersion == IP_VERSION_4) {
-    if (!IsValidDnsResponse (&Instance->Dns4TxTokens, DnsHeader->Identification, QuerySection->Type, &Item)) {
+    if (!IsValidDnsResponse (
+           &Instance->Dns4TxTokens, 
+           DnsHeader->Identification, 
+           QuerySection->Type,
+           QuerySection->Class,
+           &Item
+           )) {
       *Completed = FALSE;
       Status = EFI_ABORTED;
       goto ON_EXIT;
@@ -1171,7 +1214,13 @@ ParseDnsResponse (
     ASSERT (Item != NULL);
     Dns4TokenEntry = (DNS4_TOKEN_ENTRY *) (Item->Key);
   } else {
-    if (!IsValidDnsResponse (&Instance->Dns6TxTokens, DnsHeader->Identification, QuerySection->Type, &Item)) {
+    if (!IsValidDnsResponse (
+           &Instance->Dns6TxTokens, 
+           DnsHeader->Identification, 
+           QuerySection->Type,
+           QuerySection->Class,
+           &Item
+           )) {
       *Completed = FALSE;
       Status = EFI_ABORTED;
       goto ON_EXIT;
@@ -1184,44 +1233,111 @@ ParseDnsResponse (
   // Continue Check Some Errors.
   //
   if (DnsHeader->Flags.Bits.RCode != DNS_FLAGS_RCODE_NO_ERROR || DnsHeader->AnswersNum < 1 || \
-      DnsHeader->Flags.Bits.QR != DNS_FLAGS_QR_RESPONSE || QuerySection->Class != DNS_CLASS_INET) {
-      Status = EFI_ABORTED;
-      goto ON_EXIT;
-  }
-
-  //
-  // Free the sending packet.
-  //
-  if (Item->Value != NULL) {
-    NetbufFree ((NET_BUF *) (Item->Value));
+      DnsHeader->Flags.Bits.QR != DNS_FLAGS_QR_RESPONSE) {
+    //
+    // The domain name referenced in the query does not exist.
+    //
+    if (DnsHeader->Flags.Bits.RCode == DNS_FLAGS_RCODE_NAME_ERROR) {
+      Status = EFI_NOT_FOUND; 
+    } else {
+      Status = EFI_DEVICE_ERROR;
+    }
+    
+    goto ON_COMPLETE;
   }
   
   //
-  // Check the Query type, do some buffer allocations.
+  // Do some buffer allocations.
   //
-  if (QuerySection->Type == DNS_TYPE_A) {
-    Dns4TokenEntry->Token->RspData.H2AData = AllocatePool (sizeof (DNS_HOST_TO_ADDR_DATA));
-    ASSERT (Dns4TokenEntry->Token->RspData.H2AData != NULL);
-    Dns4TokenEntry->Token->RspData.H2AData->IpList = AllocatePool (DnsHeader->AnswersNum * sizeof (EFI_IPv4_ADDRESS));
-    ASSERT (Dns4TokenEntry->Token->RspData.H2AData->IpList != NULL);
-  } else if (QuerySection->Type == DNS_TYPE_AAAA) {
-    Dns6TokenEntry->Token->RspData.H2AData = AllocatePool (sizeof (DNS6_HOST_TO_ADDR_DATA));
-    ASSERT (Dns6TokenEntry->Token->RspData.H2AData != NULL);
-    Dns6TokenEntry->Token->RspData.H2AData->IpList = AllocatePool (DnsHeader->AnswersNum * sizeof (EFI_IPv6_ADDRESS));
-    ASSERT (Dns6TokenEntry->Token->RspData.H2AData->IpList != NULL);
+  if (Instance->Service->IpVersion == IP_VERSION_4) {
+    ASSERT (Dns4TokenEntry != NULL);
+
+    if (Dns4TokenEntry->GeneralLookUp) {
+      //
+      // It's the GeneralLookUp querying.
+      //
+      Dns4TokenEntry->Token->RspData.GLookupData = AllocatePool (sizeof (DNS_RESOURCE_RECORD));
+      if (Dns4TokenEntry->Token->RspData.GLookupData == NULL) {
+        Status = EFI_OUT_OF_RESOURCES;
+        goto ON_EXIT;
+      }
+      Dns4TokenEntry->Token->RspData.GLookupData->RRList = AllocatePool (DnsHeader->AnswersNum * sizeof (DNS_RESOURCE_RECORD));
+      if (Dns4TokenEntry->Token->RspData.GLookupData->RRList == NULL) {
+        Status = EFI_OUT_OF_RESOURCES;
+        goto ON_EXIT;
+      }
+    } else {
+      //
+      // It's not the GeneralLookUp querying. Check the Query type.
+      //
+      if (QuerySection->Type == DNS_TYPE_A) {
+        Dns4TokenEntry->Token->RspData.H2AData = AllocatePool (sizeof (DNS_HOST_TO_ADDR_DATA));
+        if (Dns4TokenEntry->Token->RspData.H2AData == NULL) {
+          Status = EFI_OUT_OF_RESOURCES;
+          goto ON_EXIT;
+        }
+        Dns4TokenEntry->Token->RspData.H2AData->IpList = AllocatePool (DnsHeader->AnswersNum * sizeof (EFI_IPv4_ADDRESS));
+        if (Dns4TokenEntry->Token->RspData.H2AData->IpList == NULL) {
+          Status = EFI_OUT_OF_RESOURCES;
+          goto ON_EXIT;
+        }
+      } else {
+        Status = EFI_UNSUPPORTED;
+        goto ON_EXIT;
+      }
+    }
   } else {
-    Status = EFI_UNSUPPORTED;
-    goto ON_EXIT;
+    ASSERT (Dns6TokenEntry != NULL);
+
+    if (Dns6TokenEntry->GeneralLookUp) {
+      //
+      // It's the GeneralLookUp querying.
+      //
+      Dns6TokenEntry->Token->RspData.GLookupData = AllocatePool (sizeof (DNS_RESOURCE_RECORD));
+      if (Dns6TokenEntry->Token->RspData.GLookupData == NULL) {
+        Status = EFI_OUT_OF_RESOURCES;
+        goto ON_EXIT;
+      }
+      Dns6TokenEntry->Token->RspData.GLookupData->RRList = AllocatePool (DnsHeader->AnswersNum * sizeof (DNS_RESOURCE_RECORD));
+      if (Dns6TokenEntry->Token->RspData.GLookupData->RRList == NULL) {
+        Status = EFI_OUT_OF_RESOURCES;
+        goto ON_EXIT;
+      }
+    } else {
+      //
+      // It's not the GeneralLookUp querying. Check the Query type.
+      //
+      if (QuerySection->Type == DNS_TYPE_AAAA) {
+        Dns6TokenEntry->Token->RspData.H2AData = AllocatePool (sizeof (DNS6_HOST_TO_ADDR_DATA));
+        if (Dns6TokenEntry->Token->RspData.H2AData == NULL) {
+          Status = EFI_OUT_OF_RESOURCES;
+          goto ON_EXIT;
+        }
+        Dns6TokenEntry->Token->RspData.H2AData->IpList = AllocatePool (DnsHeader->AnswersNum * sizeof (EFI_IPv6_ADDRESS));
+        if (Dns6TokenEntry->Token->RspData.H2AData->IpList == NULL) {
+          Status = EFI_OUT_OF_RESOURCES;
+          goto ON_EXIT;
+        }
+      } else {
+        Status = EFI_UNSUPPORTED;
+        goto ON_EXIT;
+      }
+    }
   }
+
+  Status = EFI_NOT_FOUND;
 
   //
   // Processing AnswerSection.
   //
   while (AnswerSectionNum < DnsHeader->AnswersNum) {
     //
-    // Answer name should be PTR.
+    // Answer name should be PTR, else EFI_UNSUPPORTED returned.
     //
-    ASSERT ((*(UINT8 *) AnswerName & 0xC0) == 0xC0);
+    if ((*(UINT8 *) AnswerName & 0xC0) != 0xC0) {
+      Status = EFI_UNSUPPORTED;
+      goto ON_EXIT;
+    }
     
     //
     // Get Answer section.
@@ -1232,93 +1348,192 @@ ParseDnsResponse (
     AnswerSection->Ttl = NTOHL (AnswerSection->Ttl);
     AnswerSection->DataLength = NTOHS (AnswerSection->DataLength);
 
-    ASSERT (AnswerSection->Class == DNS_CLASS_INET);
+    //
+    // Check whether it's the GeneralLookUp querying.
+    //
+    if (Instance->Service->IpVersion == IP_VERSION_4 && Dns4TokenEntry->GeneralLookUp) {
+      Dns4RR = Dns4TokenEntry->Token->RspData.GLookupData->RRList;
+      AnswerData = (UINT8 *) AnswerSection + sizeof (*AnswerSection);
 
-    if (AnswerSection->Type == QuerySection->Type) {
+      //
+      // Fill the ResourceRecord.
+      //
+      Dns4RR[RRCount].QName = AllocateZeroPool (AsciiStrLen (QueryName) + 1);
+      if (Dns4RR[RRCount].QName == NULL) {
+        Status = EFI_OUT_OF_RESOURCES;
+        goto ON_EXIT;
+      }
+      CopyMem (Dns4RR[RRCount].QName, QueryName, AsciiStrLen (QueryName));
+      Dns4RR[RRCount].QType = AnswerSection->Type;
+      Dns4RR[RRCount].QClass = AnswerSection->Class;
+      Dns4RR[RRCount].TTL = AnswerSection->Ttl;
+      Dns4RR[RRCount].DataLength = AnswerSection->DataLength;
+      Dns4RR[RRCount].RData = AllocateZeroPool (Dns4RR[RRCount].DataLength);
+      if (Dns4RR[RRCount].RData == NULL) {
+        Status = EFI_OUT_OF_RESOURCES;
+        goto ON_EXIT;
+      }
+      CopyMem (Dns4RR[RRCount].RData, AnswerData, Dns4RR[RRCount].DataLength);
+      
+      RRCount ++;
+      Status = EFI_SUCCESS;
+    } else if (Instance->Service->IpVersion == IP_VERSION_6 && Dns6TokenEntry->GeneralLookUp) {
+      Dns6RR = Dns6TokenEntry->Token->RspData.GLookupData->RRList;
+      AnswerData = (UINT8 *) AnswerSection + sizeof (*AnswerSection);
+
+      //
+      // Fill the ResourceRecord.
+      //
+      Dns6RR[RRCount].QName = AllocateZeroPool (AsciiStrLen (QueryName) + 1);
+      if (Dns6RR[RRCount].QName == NULL) {
+        Status = EFI_OUT_OF_RESOURCES;
+        goto ON_EXIT;
+      }
+      CopyMem (Dns6RR[RRCount].QName, QueryName, AsciiStrLen (QueryName));
+      Dns6RR[RRCount].QType = AnswerSection->Type;
+      Dns6RR[RRCount].QClass = AnswerSection->Class;
+      Dns6RR[RRCount].TTL = AnswerSection->Ttl;
+      Dns6RR[RRCount].DataLength = AnswerSection->DataLength;
+      Dns6RR[RRCount].RData = AllocateZeroPool (Dns6RR[RRCount].DataLength);
+      if (Dns6RR[RRCount].RData == NULL) {
+        Status = EFI_OUT_OF_RESOURCES;
+        goto ON_EXIT;
+      }
+      CopyMem (Dns6RR[RRCount].RData, AnswerData, Dns6RR[RRCount].DataLength);
+      
+      RRCount ++;
+      Status = EFI_SUCCESS;
+    } else {
+      //
+      // It's not the GeneralLookUp querying. 
+      // Check the Query type, parse the response packet.
+      //
       switch (AnswerSection->Type) {
       case DNS_TYPE_A:
         //
         // This is address entry, get Data.
         //
-        ASSERT (AnswerSection->DataLength == 4);
+        ASSERT (Dns4TokenEntry != NULL);
+
+        if (AnswerSection->DataLength != 4) {
+          Status = EFI_ABORTED;
+          goto ON_EXIT;
+        }
         
         HostAddr4 = Dns4TokenEntry->Token->RspData.H2AData->IpList;
         AnswerData = (UINT8 *) AnswerSection + sizeof (*AnswerSection);
         CopyMem (&HostAddr4[IpCount], AnswerData, sizeof (EFI_IPv4_ADDRESS));
 
-        //
-        // Update DNS cache dynamically.
-        //
-        if (Dns4CacheEntry != NULL) {
-          if (Dns4CacheEntry->HostName != NULL) {
-            FreePool (Dns4CacheEntry->HostName);
-          }
-
-          if (Dns4CacheEntry->IpAddress != NULL) {
-            FreePool (Dns4CacheEntry->IpAddress);
-          }
-          
-          FreePool (Dns4CacheEntry);
-        }
-
         // 
-        // Allocate new CacheEntry pool.
+        // Allocate new CacheEntry pool to update DNS cache dynamically.
         //
         Dns4CacheEntry = AllocateZeroPool (sizeof (EFI_DNS4_CACHE_ENTRY));
-        ASSERT (Dns4CacheEntry != NULL);
+        if (Dns4CacheEntry == NULL) {
+          Status = EFI_OUT_OF_RESOURCES;
+          goto ON_EXIT;
+        }
         Dns4CacheEntry->HostName = AllocateZeroPool (2 * (StrLen(Dns4TokenEntry->QueryHostName) + 1));
-        ASSERT (Dns4CacheEntry->HostName != NULL);
+        if (Dns4CacheEntry->HostName == NULL) {
+          Status = EFI_OUT_OF_RESOURCES;
+          goto ON_EXIT;
+        }
         CopyMem (Dns4CacheEntry->HostName, Dns4TokenEntry->QueryHostName, 2 * (StrLen(Dns4TokenEntry->QueryHostName) + 1));
         Dns4CacheEntry->IpAddress = AllocateZeroPool (sizeof (EFI_IPv4_ADDRESS));
-        ASSERT (Dns4CacheEntry->IpAddress != NULL);
+        if (Dns4CacheEntry->IpAddress == NULL) {
+          Status = EFI_OUT_OF_RESOURCES;
+          goto ON_EXIT;
+        }
         CopyMem (Dns4CacheEntry->IpAddress, AnswerData, sizeof (EFI_IPv4_ADDRESS));
-        Dns4CacheEntry->Timeout = AnswerSection->Ttl;
-        
-        UpdateDns4Cache (&mDriverData->Dns4CacheList, FALSE, TRUE, *Dns4CacheEntry);  
 
-        IpCount ++; 
+        if (CNameTtl != 0 && AnswerSection->Ttl != 0) {
+          Dns4CacheEntry->Timeout = MIN (CNameTtl, AnswerSection->Ttl);
+        } else {
+          Dns4CacheEntry->Timeout = MAX (CNameTtl, AnswerSection->Ttl);
+        }
+        
+        UpdateDns4Cache (&mDriverData->Dns4CacheList, FALSE, TRUE, *Dns4CacheEntry);
+
+        // 
+        // Free allocated CacheEntry pool.
+        //
+        FreePool (Dns4CacheEntry->HostName);
+        Dns4CacheEntry->HostName = NULL;
+        
+        FreePool (Dns4CacheEntry->IpAddress);
+        Dns4CacheEntry->IpAddress = NULL;
+
+        FreePool (Dns4CacheEntry);
+        Dns4CacheEntry = NULL;
+
+        IpCount ++;
+        Status = EFI_SUCCESS;
         break;
       case DNS_TYPE_AAAA:
         //
         // This is address entry, get Data.
         //
-        ASSERT (AnswerSection->DataLength == 16);
+        ASSERT (Dns6TokenEntry != NULL);
+
+        if (AnswerSection->DataLength != 16) {
+          Status = EFI_ABORTED;
+          goto ON_EXIT;
+        }
         
         HostAddr6 = Dns6TokenEntry->Token->RspData.H2AData->IpList;
         AnswerData = (UINT8 *) AnswerSection + sizeof (*AnswerSection);
         CopyMem (&HostAddr6[IpCount], AnswerData, sizeof (EFI_IPv6_ADDRESS));
 
-        //
-        // Update DNS cache dynamically.
-        //
-        if (Dns6CacheEntry != NULL) {
-          if (Dns6CacheEntry->HostName != NULL) {
-            FreePool (Dns6CacheEntry->HostName);
-          }
-
-          if (Dns6CacheEntry->IpAddress != NULL) {
-            FreePool (Dns6CacheEntry->IpAddress);
-          }
-          
-          FreePool (Dns6CacheEntry);
-        }
-
         // 
-        // Allocate new CacheEntry pool.
+        // Allocate new CacheEntry pool to update DNS cache dynamically.
         //
         Dns6CacheEntry = AllocateZeroPool (sizeof (EFI_DNS6_CACHE_ENTRY));
-        ASSERT (Dns6CacheEntry != NULL);
+        if (Dns6CacheEntry == NULL) {
+          Status = EFI_OUT_OF_RESOURCES;
+          goto ON_EXIT;
+        }
         Dns6CacheEntry->HostName = AllocateZeroPool (2 * (StrLen(Dns6TokenEntry->QueryHostName) + 1));
-        ASSERT (Dns6CacheEntry->HostName != NULL);
+        if (Dns6CacheEntry->HostName == NULL) {
+          Status = EFI_OUT_OF_RESOURCES;
+          goto ON_EXIT;
+        }
         CopyMem (Dns6CacheEntry->HostName, Dns6TokenEntry->QueryHostName, 2 * (StrLen(Dns6TokenEntry->QueryHostName) + 1));
         Dns6CacheEntry->IpAddress = AllocateZeroPool (sizeof (EFI_IPv6_ADDRESS));
-        ASSERT (Dns6CacheEntry->IpAddress != NULL);
+        if (Dns6CacheEntry->IpAddress == NULL) {
+          Status = EFI_OUT_OF_RESOURCES;
+          goto ON_EXIT;
+        }
         CopyMem (Dns6CacheEntry->IpAddress, AnswerData, sizeof (EFI_IPv6_ADDRESS));
-        Dns6CacheEntry->Timeout = AnswerSection->Ttl;
+
+        if (CNameTtl != 0 && AnswerSection->Ttl != 0) {
+          Dns6CacheEntry->Timeout = MIN (CNameTtl, AnswerSection->Ttl);
+        } else {
+          Dns6CacheEntry->Timeout = MAX (CNameTtl, AnswerSection->Ttl);
+        }
         
-        UpdateDns6Cache (&mDriverData->Dns6CacheList, FALSE, TRUE, *Dns6CacheEntry);  
+        UpdateDns6Cache (&mDriverData->Dns6CacheList, FALSE, TRUE, *Dns6CacheEntry);
+
+        // 
+        // Free allocated CacheEntry pool.
+        //
+        FreePool (Dns6CacheEntry->HostName);
+        Dns6CacheEntry->HostName = NULL;
+        
+        FreePool (Dns6CacheEntry->IpAddress);
+        Dns6CacheEntry->IpAddress = NULL;
+
+        FreePool (Dns6CacheEntry);
+        Dns6CacheEntry = NULL;
         
         IpCount ++;
+        Status = EFI_SUCCESS;
+        break;
+      case DNS_TYPE_CNAME:
+        //
+        // According RFC 1034 - 3.6.2, if the query name is an alias, the name server will include the CNAME 
+        // record in the response and restart the query at the domain name specified in the data field of the 
+        // CNAME record. So, just record the TTL value of the CNAME, then skip to parse the next record.
+        //
+        CNameTtl = AnswerSection->Ttl;
         break;
       default:
         Status = EFI_UNSUPPORTED;
@@ -1333,56 +1548,58 @@ ParseDnsResponse (
     AnswerSectionNum ++;
   }
 
-  if (QuerySection->Type == DNS_TYPE_A) {
-    Dns4TokenEntry->Token->RspData.H2AData->IpCount = IpCount;
-  } else if (QuerySection->Type == DNS_TYPE_AAAA) {
-    Dns6TokenEntry->Token->RspData.H2AData->IpCount = IpCount;
-  }
-
-  //
-  // Parsing is complete, SignalEvent here.
-  //
   if (Instance->Service->IpVersion == IP_VERSION_4) {
+    ASSERT (Dns4TokenEntry != NULL);
+    
+    if (Dns4TokenEntry->GeneralLookUp) {
+      Dns4TokenEntry->Token->RspData.GLookupData->RRCount = RRCount;
+    } else {
+      if (QuerySection->Type == DNS_TYPE_A) {
+        Dns4TokenEntry->Token->RspData.H2AData->IpCount = IpCount;
+      } else {
+        Status = EFI_UNSUPPORTED;
+        goto ON_EXIT;
+      }
+    }
+  } else {
+    ASSERT (Dns6TokenEntry != NULL);
+
+    if (Dns6TokenEntry->GeneralLookUp) {
+      Dns6TokenEntry->Token->RspData.GLookupData->RRCount = RRCount;
+    } else {
+      if (QuerySection->Type == DNS_TYPE_AAAA) {
+        Dns6TokenEntry->Token->RspData.H2AData->IpCount = IpCount;
+      } else {
+        Status = EFI_UNSUPPORTED;
+        goto ON_EXIT;
+      }
+    }
+  }
+  
+ON_COMPLETE:
+  //
+  // Parsing is complete, free the sending packet and signal Event here.
+  //
+  if (Item != NULL && Item->Value != NULL) {
+    NetbufFree ((NET_BUF *) (Item->Value));
+  }
+  
+  if (Instance->Service->IpVersion == IP_VERSION_4) {
+    ASSERT (Dns4TokenEntry != NULL);
     Dns4RemoveTokenEntry (&Instance->Dns4TxTokens, Dns4TokenEntry);
-    Dns4TokenEntry->Token->Status = EFI_SUCCESS;
+    Dns4TokenEntry->Token->Status = Status;
     if (Dns4TokenEntry->Token->Event != NULL) {
       gBS->SignalEvent (Dns4TokenEntry->Token->Event);
       DispatchDpc ();
     }
   } else {
+    ASSERT (Dns6TokenEntry != NULL);
     Dns6RemoveTokenEntry (&Instance->Dns6TxTokens, Dns6TokenEntry);
-    Dns6TokenEntry->Token->Status = EFI_SUCCESS;
+    Dns6TokenEntry->Token->Status = Status;
     if (Dns6TokenEntry->Token->Event != NULL) {
       gBS->SignalEvent (Dns6TokenEntry->Token->Event);
       DispatchDpc ();
     }
-  }
-
-  // 
-  // Free allocated CacheEntry pool.
-  //
-  if (Dns4CacheEntry != NULL) {
-    if (Dns4CacheEntry->HostName != NULL) {
-      FreePool (Dns4CacheEntry->HostName);
-    }
-
-    if (Dns4CacheEntry->IpAddress != NULL) {
-      FreePool (Dns4CacheEntry->IpAddress);
-    }
-
-    FreePool (Dns4CacheEntry);
-  }
-  
-  if (Dns6CacheEntry != NULL) {
-    if (Dns6CacheEntry->HostName != NULL) {
-      FreePool (Dns6CacheEntry->HostName);
-    }
-
-    if (Dns6CacheEntry->IpAddress != NULL) {
-      FreePool (Dns6CacheEntry->IpAddress);
-    }
-  
-    FreePool (Dns6CacheEntry);
   }
 
 ON_EXIT:
@@ -1425,6 +1642,10 @@ DnsOnPacketReceived (
   }
 
   ASSERT (Packet != NULL);
+
+  if (Packet->TotalSize <= sizeof (DNS_HEADER)) {
+    goto ON_EXIT;
+  }
   
   RcvString = NetbufGetByte (Packet, 0, NULL);
   ASSERT (RcvString != NULL);
@@ -1434,15 +1655,15 @@ DnsOnPacketReceived (
   //
   ParseDnsResponse (Instance, RcvString, &Completed);
 
-  ON_EXIT:
+ON_EXIT:
 
-    if (Packet != NULL) {
-      NetbufFree (Packet);
-    }
+  if (Packet != NULL) {
+    NetbufFree (Packet);
+  }
 
-    if (!Completed) {
-      UdpIoRecvDatagram (Instance->UdpIo, DnsOnPacketReceived, Instance, 0);
-    }
+  if (!Completed) {
+    UdpIoRecvDatagram (Instance->UdpIo, DnsOnPacketReceived, Instance, 0);
+  }
 }
 
 /**
@@ -1537,36 +1758,36 @@ DoDnsQuery (
 }
 
 /**
-  Construct the Packet to query Ip.
+  Construct the Packet according query section.
 
   @param  Instance              The DNS instance
-  @param  HostName              Queried HostName  
-  @param  Type                  DNS query Type
-  @param  Packet                The packet for querying Ip
+  @param  QueryName             Queried Name  
+  @param  Type                  Queried Type 
+  @param  Class                 Queried Class 
+  @param  Packet                The packet for query
 
   @retval EFI_SUCCESS           The packet is constructed.
   @retval Others                Failed to construct the Packet.
 
 **/
 EFI_STATUS
-ConstructDNSQueryIp (
+ConstructDNSQuery (
   IN  DNS_INSTANCE              *Instance,
-  IN  CHAR16                    *HostName,
+  IN  CHAR8                     *QueryName,
   IN  UINT16                    Type,
+  IN  UINT16                    Class,
   OUT NET_BUF                   **Packet
   )
 {
   NET_FRAGMENT        Frag;
   DNS_HEADER          *DnsHeader;
-  CHAR8               *QueryName;
-  DNS_QUERY_SECTION   *QuerySection;
-  CHAR8               *Header;
-  CHAR8               *Tail;
-  UINTN               Len;
-  UINTN               Index;
-  
+  DNS_QUERY_SECTION   *DnsQuery;
 
-  Frag.Bulk = AllocatePool (DNS_DEFAULT_BLKSIZE * sizeof (UINT8));
+  //
+  // Messages carried by UDP are restricted to 512 bytes (not counting the IP
+  // or UDP headers).
+  //
+  Frag.Bulk = AllocatePool (DNS_MAX_MESSAGE_SIZE * sizeof (UINT8));
   if (Frag.Bulk == NULL) {
     return EFI_OUT_OF_RESOURCES;
   }
@@ -1597,37 +1818,20 @@ ConstructDNSQueryIp (
   //
   // Fill Query name
   //
-  QueryName = (CHAR8 *) (Frag.Bulk + Frag.Len);
-  Header = QueryName;
-  Tail = Header + 1;
-  Len = 0;
-  for (Index = 0; HostName[Index] != 0; Index++) {
-    *Tail = (CHAR8) HostName[Index];
-    if (*Tail == '.') {
-      *Header = (CHAR8) Len;
-      Header = Tail;
-      Tail ++;
-      Len = 0;
-    } else {
-      Tail++;
-      Len++;
-    }
-  }
-  *Header = (CHAR8) Len;
-  *Tail = 0;
-  Frag.Len = (UINT32) (Frag.Len + StrLen (HostName) + 2); /// 1 for header, 1 for tail.
-
+  CopyMem (Frag.Bulk + Frag.Len, QueryName, AsciiStrLen (QueryName));
+  Frag.Len = (UINT32) (Frag.Len + AsciiStrLen (QueryName));
+  *(Frag.Bulk + Frag.Len) = 0;
+  Frag.Len ++;
+  
   //
   // Rest query section
   //
-  QuerySection = (DNS_QUERY_SECTION *) (Frag.Bulk + Frag.Len);
-  QuerySection->Type = Type;
-  QuerySection->Class = DNS_CLASS_INET;
+  DnsQuery = (DNS_QUERY_SECTION *) (Frag.Bulk + Frag.Len);
 
-  QuerySection->Type = HTONS (QuerySection->Type);
-  QuerySection->Class = HTONS (QuerySection->Class);
+  DnsQuery->Type = HTONS (Type);
+  DnsQuery->Class = HTONS (Class);
 
-  Frag.Len += sizeof (*QuerySection);
+  Frag.Len += sizeof (*DnsQuery);
 
   //
   // Wrap the Frag in a net buffer.
@@ -1847,7 +2051,7 @@ DnsOnTimerUpdate (
   Entry = mDriverData->Dns4CacheList.ForwardLink;
   while (Entry != &mDriverData->Dns4CacheList) {
     Item4 = NET_LIST_USER_STRUCT (Entry, DNS4_CACHE, AllCacheLink);
-    if (Item4->DnsCache.Timeout<=0) {
+    if (Item4->DnsCache.Timeout == 0) {
       RemoveEntryList (&Item4->AllCacheLink);
       Entry = mDriverData->Dns4CacheList.ForwardLink;
     } else {
@@ -1866,7 +2070,7 @@ DnsOnTimerUpdate (
   Entry = mDriverData->Dns6CacheList.ForwardLink;
   while (Entry != &mDriverData->Dns6CacheList) {
     Item6 = NET_LIST_USER_STRUCT (Entry, DNS6_CACHE, AllCacheLink);
-    if (Item6->DnsCache.Timeout<=0) {
+    if (Item6->DnsCache.Timeout == 0) {
       RemoveEntryList (&Item6->AllCacheLink);
       Entry = mDriverData->Dns6CacheList.ForwardLink;
     } else {

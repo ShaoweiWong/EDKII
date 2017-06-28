@@ -1,7 +1,7 @@
 /** @file
 Functions implementation related with DHCPv4/v6 for DNS driver.
 
-Copyright (c) 2015, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2015 - 2017, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -13,152 +13,6 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 **/
 
 #include "DnsImpl.h"
-
-/**
-  The callback function for the timer event used to get map.
-
-  @param[in] Event    The event this function is registered to.
-  @param[in] Context  The context registered to the event.
-**/
-VOID
-EFIAPI
-TimeoutToGetMap (
-  IN EFI_EVENT      Event,
-  IN VOID           *Context
-  )
-{
-  *((BOOLEAN *) Context) = TRUE;
-  return ;
-}
-
-/**
-  Create an IP child, use it to start the auto configuration, then destroy it.
-
-  @param[in] Controller       The controller which has the service installed.
-  @param[in] Image            The image handle used to open service.
-
-  @retval EFI_SUCCESS         The configuration is done.
-  @retval Others              Other errors as indicated.
-**/
-EFI_STATUS
-EFIAPI
-DnsStartIp4(
-  IN  EFI_HANDLE            Controller,
-  IN  EFI_HANDLE            Image
-  )
-{
-  EFI_IP4_PROTOCOL              *Ip4;
-  EFI_HANDLE                    Ip4Handle;
-  EFI_EVENT                     TimerToGetMap;
-  EFI_IP4_CONFIG_DATA           Ip4ConfigData;
-  EFI_IP4_MODE_DATA             Ip4Mode;
-  EFI_STATUS                    Status;
-
-  BOOLEAN                       Timeout;
-
-  //
-  // Get the Ip4ServiceBinding Protocol
-  //
-  Ip4Handle     = NULL;
-  Ip4           = NULL;
-  TimerToGetMap = NULL;
-  
-  Timeout      = FALSE;
-
-  Status = NetLibCreateServiceChild (
-             Controller,
-             Image,
-             &gEfiIp4ServiceBindingProtocolGuid,
-             &Ip4Handle
-             );
-
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
-
-  Status = gBS->OpenProtocol (
-                 Ip4Handle,
-                 &gEfiIp4ProtocolGuid,
-                 (VOID **) &Ip4,
-                 Controller,
-                 Image,
-                 EFI_OPEN_PROTOCOL_GET_PROTOCOL
-                 );
-
-  if (EFI_ERROR (Status)) {
-    goto ON_EXIT;
-  }
-
-  Ip4ConfigData.DefaultProtocol          = EFI_IP_PROTO_ICMP;
-  Ip4ConfigData.AcceptAnyProtocol        = FALSE;
-  Ip4ConfigData.AcceptIcmpErrors         = FALSE;
-  Ip4ConfigData.AcceptBroadcast          = FALSE;
-  Ip4ConfigData.AcceptPromiscuous        = FALSE;
-  Ip4ConfigData.UseDefaultAddress        = TRUE;
-  ZeroMem (&Ip4ConfigData.StationAddress, sizeof (EFI_IPv4_ADDRESS));
-  ZeroMem (&Ip4ConfigData.SubnetMask, sizeof (EFI_IPv4_ADDRESS));
-  Ip4ConfigData.TypeOfService            = 0;
-  Ip4ConfigData.TimeToLive               = 1;
-  Ip4ConfigData.DoNotFragment            = FALSE;
-  Ip4ConfigData.RawData                  = FALSE;
-  Ip4ConfigData.ReceiveTimeout           = 0;
-  Ip4ConfigData.TransmitTimeout          = 0;
-
-  Status = Ip4->Configure (Ip4, &Ip4ConfigData);
-
-  if (Status == EFI_NO_MAPPING) {
-    Status  = gBS->CreateEvent (
-                    EVT_NOTIFY_SIGNAL | EVT_TIMER,
-                    TPL_CALLBACK,
-                    TimeoutToGetMap,
-                    &Timeout,
-                    &TimerToGetMap
-                    );
-    
-    if (EFI_ERROR (Status)) {
-      goto ON_EXIT;
-    }
-    
-    Status = gBS->SetTimer (
-                   TimerToGetMap,
-                   TimerRelative,
-                   MultU64x32 (10000000, 5)
-                   );
-    
-    if (EFI_ERROR (Status)) {
-      goto ON_EXIT;
-    }
-    
-    while (!Timeout) {
-      Ip4->Poll (Ip4);
-  
-      if (!EFI_ERROR (Ip4->GetModeData (Ip4, &Ip4Mode, NULL, NULL)) && 
-          Ip4Mode.IsConfigured) {       
-        break;
-      }
-    }
-
-    if (Timeout) {
-      Status = EFI_DEVICE_ERROR;
-    }
-  }
-  
-ON_EXIT: 
-
-  if (TimerToGetMap != NULL) {
-    gBS->SetTimer (TimerToGetMap, TimerCancel, 0);
-    gBS->CloseEvent (TimerToGetMap);
-  }
-
-  NetLibDestroyServiceChild (
-    Controller,
-    Image,
-    &gEfiIp4ServiceBindingProtocolGuid,
-    Ip4Handle
-    );
-  
-  return Status;
-}
 
 /**
   This function initialize the DHCP4 message instance.
@@ -469,16 +323,6 @@ GetDns4ServerFromDhcp4 (
   }
 
   //
-  // Start the auto configuration if UseDefaultSetting.
-  //
-  if (Instance->Dns4CfgData.UseDefaultSetting) {
-    Status = DnsStartIp4 (Controller, Image);
-    if (EFI_ERROR(Status)) {
-      return Status;
-    }
-  }
-  
-  //
   // Create a Mnp child instance, get the protocol and config for it.
   //
   Status = NetLibCreateServiceChild (
@@ -618,7 +462,7 @@ GetDns4ServerFromDhcp4 (
   
   ParaList[0]->OpCode  = DHCP4_TAG_TYPE;
   ParaList[0]->Length  = 1;
-  ParaList[0]->Data[0] = DHCP4_MSG_INFORM;
+  ParaList[0]->Data[0] = DHCP4_MSG_REQUEST;
   
   ParaList[1] = AllocateZeroPool (sizeof (EFI_DHCP4_PACKET_OPTION));
   if (ParaList[1] == NULL) {
