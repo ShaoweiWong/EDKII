@@ -1,3 +1,8 @@
+T201706281942
+Generate MyWorkSpace/Config
+    1. Create edksetup.cmd to call edksetup.bat.
+    2. Run edksetup.cmd to genrenate build_rule.txt, target.txt and tools_def.txt
+
 T201706281858
 Download UDK2017:
     1. UDK2017
